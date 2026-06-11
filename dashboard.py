@@ -2,7 +2,6 @@ import sqlite3
 import streamlit as pd_stream
 import pandas as pd
 import plotly.express as px
-import os
 
 pd_stream.set_page_config(
     page_title="UzPhishGuard SOC v2 | SIEM Control Center",
@@ -28,14 +27,11 @@ pd_stream.write("---")
 df = get_v2_data()
 
 if df.empty:
-    pd_stream.info("📡 Tizim tinch holatda. Hujumlar aniqlanishi bilanoq kiber-xarita va tahlillar shu yerda aks etadi.")
+    pd_stream.info("📡 Tizim tinch holatda. Hujumlar aniqlanishi bilanoq kiber-tahlillar shu yerda aks etadi.")
 else:
-    # 1. SOC METRIKALAR & RISK SCORE CARD
     total_events = len(df)
     malicious = df[df['status'].str.contains("BLOCKED", na=False)]
     total_phish = len(malicious)
-    
-    # Guruh xavfsizlik indeksini hisoblash
     safety_index = 100 if total_events == 0 else int(((total_events - total_phish) / total_events) * 100)
     
     c1, c2, c3, c4 = pd_stream.columns(4)
@@ -52,9 +48,7 @@ else:
         
     pd_stream.write("---")
     
-    # 2. VIZUAL GRAFIKLAR (SIEM LIVE THREAT MAP ANALOGI)
     col_left, col_right = pd_stream.columns(2)
-    
     with col_left:
         pd_stream.subheader("📈 Kiber-Hujumlar Vaqt Kesimida Grafigi")
         df['scan_date'] = pd.to_datetime(df['scan_date'])
@@ -63,7 +57,7 @@ else:
         pd_stream.plotly_chart(fig_line, use_container_width=True)
         
     with col_right:
-        pd_stream.subheader("👤 User Risk Score Card (Eng ko'p havola yuboruvchilar)")
+        pd_stream.subheader("👤 User Risk Score Card")
         user_counts = df['username'].value_counts().reset_index()
         user_counts.columns = ['Foydalanuvchi', 'Yuborilgan Havolalar Soni']
         fig_user = px.bar(user_counts, x='Yuborilgan Havolalar Soni', y='Foydalanuvchi', orientation='h', title="Top Traffic Creators", color='Yuborilgan Havolalar Soni', color_continuous_scale=px.colors.sequential.Blugrn)
@@ -71,35 +65,25 @@ else:
 
     pd_stream.write("---")
     
-    # 3. 2-BOSQICH: ZERO-DAY SANDBOX SCREENSHOT VIEWER
-    pd_stream.subheader("🌐 Zero-Day Sandbox Screenshot Viewer")
+    # KIBER-SANDBOX VIEWER
+    pd_stream.subheader("🌐 Enterprise Zero-Day Sandbox Screenshot Viewer")
     sandbox_df = df[df['screenshot_path'].notna() & (df['screenshot_path'] != "")]
     
     if not sandbox_df.empty:
-        selected_url = pd_stream.selectbox("AI tomonidan skrinshot qilingan fishing saytini tanlang:", sandbox_df['url'].unique())
+        selected_url = pd_stream.selectbox("AI va Urlscan tomonidan skrinshot qilingan fishing saytini tanlang:", sandbox_df['url'].unique())
         img_row = sandbox_df[sandbox_df['url'] == selected_url].iloc[0]
         
-        if os.path.exists(img_row['screenshot_path']):
-            c_img, c_det = pd_stream.columns([2, 1])
-            with c_img:
-                pd_stream.image(img_row['screenshot_path'], caption=f"Fishing saytining jonli skrinshoti: {selected_url}", use_column_width=True)
-            with c_det:
-                pd_stream.info(f"📋 **Sandbox Detallari:**\n\n* **Skaner vaqti:** {img_row['scan_date']}\n* **Guruh:** {img_row['chat_title']}\n* **Tarqatuvchi:** @{img_row['username']}\n* **Xavf darajasi:** {img_row['risk_score']}%")
-        else:
-            pd_stream.warning("Skrinshot fayli serverda topilmadi.")
+        c_img, c_det = pd_stream.columns([2, 1])
+        with c_img:
+            pd_stream.image(img_row['screenshot_path'], caption=f"Professional Sandbox Skrinshoti: {selected_url}", use_column_width=True)
+        with c_det:
+            pd_stream.info(f"📋 **Intel Detallari:**\n\n* **Skaner vaqti:** {img_row['scan_date']}\n* **Guruh:** {img_row['chat_title']}\n* **Tarqatuvchi:** @{img_row['username']}\n* **Xavf darajasi:** {img_row['risk_score']}%")
     else:
-        pd_stream.info("Sandbox hozircha bo'sh. Fishing havolalar tutilganda ularning skrinshotlari shu yerda chiqadi.")
+        pd_stream.info("Sandbox hozircha bo'sh. Fishing havolalar tutilganda kiber-markaz skrinshotlari shu yerda chiqadi.")
 
     pd_stream.write("---")
-    
-    # 4. LIVE LOGS JURNALI
-    pd_stream.subheader("📋 SIEM Jonli Hodisalar Jurnali (Latest Logs)")
+    pd_stream.subheader("📋 SIEM Jonli Hodisalar Jurnali")
     log_df = df.sort_index(ascending=False).rename(columns={
-        "scan_date": "Skaner Vaqti",
-        "chat_title": "Guruh Nomi",
-        "username": "Foydalanuvchi Akkaunti",
-        "url": "Tekshirilgan URL",
-        "status": "Tizim Qarori (Status)",
-        "risk_score": "Xavf Darajasi"
+        "scan_date": "Skaner Vaqti", "chat_title": "Guruh Nomi", "username": "Foydalanuvchi Akkaunti", "url": "Tekshirilgan URL", "status": "Tizim Qarori", "risk_score": "Xavf Darajasi"
     })
     pd_stream.dataframe(log_df, use_container_width=True)
