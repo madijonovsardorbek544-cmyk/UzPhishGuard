@@ -69,71 +69,42 @@ def is_local_blacklisted(url):
             return True
     return False
 
-# ----------------- INTELLEKTUAL KIBER-ALGORITMLAR (3-BOSQICH) -----------------
+# ----------------- INTELLEKTUAL KIBER-ALGORITMLAR -----------------
 
 def check_virustotal(url: str) -> bool:
-    """
-    8-QADAM: VirusTotal API v3 orqali havolani global tekshirish.
-    Antiviruslar xavfli desa True qaytaradi.
-    """
     api_url = "https://www.virustotal.com/api/v3/urls"
     headers = {"accept": "application/json", "x-key": VT_API_KEY}
-    
     try:
-        # 1. URLni scan qilish uchun yuboramiz
         response = requests.post(api_url, data={"url": url}, headers=headers, timeout=10)
         if response.status_code == 200:
             analysis_id = response.json()["data"]["id"]
-            # 2. Tahlil natijasini tekshiramiz
             analysis_url = f"https://www.virustotal.com/api/v3/analyses/{analysis_id}"
             report = requests.get(analysis_url, headers=headers, timeout=10)
             if report.status_code == 200:
                 stats = report.json()["data"]["attributes"]["stats"]
                 malicious_count = stats.get("malicious", 0) + stats.get("phishing", 0)
-                # Agar kamida 2ta xalqaro antivirus zararli desa, True (Xavfli)
                 if malicious_count >= 2:
                     return True
     except Exception as e:
-        print(f"VirusTotal API xatoligi: {e}")
+        logging.error(f"VirusTotal Error: {e}")
     return False
 
 def check_typosquatting(url: str) -> bool:
-    """
-    9-QADAM: O'zbekistondagi mashhur brendlar domenlariga
-    soxta o'xshashlikni (Typosquatting) aniqlash algoritmi.
-    """
     official_domains = ["payme.uz", "click.uz", "uzcard.uz", "kun.uz", "id.egov.uz", "olx.uz"]
-    
-    # Havoladan domenni ajratib olish (masalan, https://payme-uz.ru/ -> payme-uz.ru)
     clean_url = url.lower().replace("https://", "").replace("http://", "").split("/")[0]
-    
     for official in official_domains:
         if clean_url == official:
-            return False # Bu rasmiy sayt, xavfsiz
-            
-        # O'xshashlik foizini hisoblaymiz (SequenceMatcher yordamida)
+            return False
         similarity = SequenceMatcher(None, clean_url, official).ratio()
-        
-        # Agar o'xshashlik 70% dan baland bo'lsa, lekin xuddi o'zi bo'lmasa - bu soxta!
         if similarity >= 0.70 and official in clean_url or (similarity >= 0.75):
             return True
     return False
 
 def contains_phishing_keywords(text: str) -> bool:
-    """
-    10-QADAM: Matnli Heuristic tahlil. 
-    Fishing xabarlaridagi fishing o'zbekcha kalit so'zlar.
-    """
     keywords = ["yutuq", "mukofot", "aksiya", "tekin", "premium", "jamg'arma", "fondi", "tarqating", "omadli"]
     text_lower = text.lower()
-    
-    # Agar xabarda kamida 2ta shubhali so'z ishtirok etsa
     match_count = sum(1 for word in keywords if word in text_lower)
-    if match_count >= 2:
-        return True
-    return False
-
-# -----------------------------------------------------------------------------
+    return match_count >= 2
 
 def extract_links(text: str) -> list:
     url_pattern = r'https?://[^\s]+'
@@ -141,6 +112,11 @@ def extract_links(text: str) -> list:
 
 @dp.message()
 async def check_message_for_links(message: types.Message):
+    # Bot shaxsiy chatda /start buyrug'iga javob berishi uchun diagnostic block
+    if message.text and message.text.startswith('/start'):
+        await message.answer("🛡️ **UzPhishGuard Cyber Security Bot Active!**\nAdd me to groups as an Admin to secure links.")
+        return
+
     if message.text:
         text_content = message.text
         detected_links = extract_links(text_content)
@@ -154,27 +130,19 @@ async def check_message_for_links(message: types.Message):
                 is_phishing = False
                 reason = ""
                 
-                # 1-Bosqich: Mahalliy qora ro'yxatni tekshirish
                 if is_local_blacklisted(link):
                     is_phishing = True
                     reason = "Mahalliy qora ro'yxat (Blacklist)"
-                    
-                # 2-Bosqich: Typosquatting (Brend o'xshashligi) tekshiruvi
                 elif check_typosquatting(link):
                     is_phishing = True
                     reason = "Soxta brend domeni (Typosquatting)"
-                    
-                # 3-Bosqich: O'zbekcha matn tahlili
                 elif contains_phishing_keywords(text_content):
                     is_phishing = True
                     reason = "Shubhali fishing matni (Heuristic)"
-                    
-                # 4-Bosqich: Global VirusTotal API tekshiruvi
                 elif check_virustotal(link):
                     is_phishing = True
                     reason = "Global Antivirus Hisoboti (VirusTotal)"
                 
-                # YAKUNIY QAROR
                 if is_phishing:
                     log_link(user_id, user_name, chat_title, link, f"BLOCKED ({reason})")
                     try:
@@ -186,15 +154,14 @@ async def check_message_for_links(message: types.Message):
                             f"💡 *Tavsiya: Shaxsiy ma'lumotlar va plastik karta kodlarini kiritmang!*"
                         )
                     except Exception as e:
-                        print(f"Xabarni o'chirishda xatolik: {e}")
-                    break # Bitta fishing link yetarli xabarni bloklashga
+                        logging.error(f"Message delete error: {e}")
+                    break
                 else:
                     log_link(user_id, user_name, chat_title, link, "CLEAN (Passed)")
-                    print(f"✅ Safe link logged: {link}")
 
 async def main():
     init_db()
-    print("UzPhishGuard TOP-TIER kiberxavfsizlik intellekti ishga tushdi...")
+    logging.info("UzPhishGuard Core Engine Started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
