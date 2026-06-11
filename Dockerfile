@@ -1,26 +1,31 @@
-# Barqaror Python versiyasi
+# 1. Eng barqaror va engil Python muhitini tanlaymiz
 FROM python:3.10-slim
 
-# Ishchi papka
+# 2. Konteyner ichida ishchi papka yaratamiz
 WORKDIR /app
 
-# Server paketlarini minimal ko'rinishda yangilaymiz (Muammo tug'dirgan paket olib tashlandi)
+# 3. Tizim paketlarini yangilaymiz va kerakli Linux instrumentlarini o'rnatamiz
 RUN apt-get update && apt-get install -y \
     build-essential \
+    curl \
+    software-properties-common \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Kutubxonalarni yuklash va o'rnatish
+# 4. Bog'liqliklar ro'yxatini konteynerga nusxalaymiz
 COPY requirements.txt .
+
+# 5. Barcha Python kutubxonalarini keshsiz, tezkor o'rnatamiz
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Loyihaning barcha fayllarini nusxalash
+# 6. Loyihaning barcha kodlari va fayllarini konteyner ichiga ko'chiramiz
 COPY . .
 
-# Dashboard uchun port
+# 7. Veb-sayt (Streamlit dashboard) ishlaydigan portni ochib qo'yamiz
 EXPOSE 8501
 
-# Skriptga ruxsat berish
+# 8. start.sh skript fayliga ishga tushish huquqini beramiz
 RUN chmod +x start.sh
-CMD python main.py & streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
-# Ishga tushirish
+
+# 9. Konteyner yonganda start.sh skriptini ishga tushiramiz
 CMD ["./start.sh"]
