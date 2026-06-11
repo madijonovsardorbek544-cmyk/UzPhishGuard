@@ -26,8 +26,8 @@ def get_dashboard_data():
         return pd.DataFrame(columns=["scan_date", "chat_title", "username", "url", "status"])
 
 # Sarlavha qismi
-pd_stream.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🛡️ UzPhishGuard Real-Time Cyber Security Dashboard</h1>", unsafe_view=True)
-pd_stream.markdown("<p style='text-align: center; color: #6B7280;'>Guruhlarni fishing va kiber-hujumlardan himoya qilish tizimi statistikasi</p>", unsafe_view=True)
+pd_stream.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🛡️ UzPhishGuard Real-Time Cyber Security Dashboard</h1>", unsafe_allow_html=True)
+pd_stream.markdown("<p style='text-align: center; color: #6B7280;'>Guruhlarni fishing va kiber-hujumlardan himoya qilish tizimi statistikasi</p>", unsafe_allow_html=True)
 pd_stream.write("---")
 
 df = get_dashboard_data()
