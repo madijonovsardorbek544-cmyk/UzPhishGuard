@@ -99,7 +99,49 @@ def check_typosquatting(url: str) -> bool:
         if similarity >= 0.70 and official in clean_url or (similarity >= 0.75):
             return True
     return False
+def clean_text_for_ai(text: str) -> str:
+    """
+    Hujumchilar so'zlar orasiga qo'ygan ortiqcha belgilarni tozalaydi.
+    Masalan: 't.e.k.i.n' -> 'tekin', 'P_R_E_M_I_U_M' -> 'premium'
+    """
+    # Harflar orasidagi nuqta, chiziqcha va pastki chiziqlarni olib tashlaydi
+    cleaned = re.sub(r'(?<=\s)(?:\w\.)+\w?', lambda m: m.group().replace('.', ''), text)
+    # Matndagi barcha maxsus belgilarni tozalash (faqat harf va raqamlar qoladi)
+    cleaned = re.sub(r'[._\-\+\*]', '', text)
+    return cleaned.lower()
 
+async def analyze_with_ai(text: str) -> bool:
+    """
+    Hugging Face inference API orqali matnni kiber-manipulyatsiyaga tekshiradi.
+    Agar AI matnda firgarlik xavfi yuqori deb topsa, True qaytaradi.
+    """
+    # Tezkarlik va xavfsizlik uchun eng yaxshi ochiq kodli kiber-model
+    API_URL = "https://api-inference.huggingface.co/models/DTrimper/phishing-detection-transformer"
+    # Bu yerda siz keyinchalik o'zingizni HF tokeningizni qo'yishingiz mumkin, hozircha ochiq so'rov
+    headers = {"Authorization": "Bearer hf_placeholder_token_if_needed"}
+    
+    cleaned_text = clean_text_for_ai(text)
+    
+    try:
+        # AI modeliga so'rov yuborish (Asinxron tarzda bajariladi)
+        response = await asyncio.to_thread(
+            requests.post, API_URL, json={"inputs": cleaned_text}, timeout=5
+        )
+        if response.status_code == 200:
+            predictions = response.json()
+            # Model natijasini tahlil qilish (ko'pincha LABEL_1 xavfli, LABEL_0 xavfsiz bo'ladi)
+            # Yoki model score ko'rsatkichini tekshiramiz
+            if isinstance(predictions, list) and len(predictions) > 0:
+                top_prediction = predictions[0][0] if isinstance(predictions[0], list) else predictions[0]
+                label = top_prediction.get("label", "")
+                score = top_prediction.get("score", 0.0)
+                
+                # Agar model 'LABEL_1' (Phishing) desa va ishonchliligi 75% dan yuqori bo'lsa
+                if "1" in label and score > 0.75:
+                    return True
+    except Exception as e:
+        logging.error(f"AI Engine Error: {e}")
+    return False
 def contains_phishing_keywords(text: str) -> bool:
     keywords = ["yutuq", "mukofot", "aksiya", "tekin", "premium", "jamg'arma", "fondi", "tarqating", "omadli"]
     text_lower = text.lower()
