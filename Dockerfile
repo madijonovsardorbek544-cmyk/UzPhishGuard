@@ -1,30 +1,26 @@
-# Base image sifatida eng barqaror Python versiyasini tanlaymiz
+# Barqaror Python versiyasi
 FROM python:3.10-slim
 
-# Server ichida loyiha papkasini ochamiz
+# Ishchi papka
 WORKDIR /app
 
-# Tizim uchun kerakli paketlarni yangilaymiz
+# Server paketlarini minimal ko'rinishda yangilaymiz (Muammo tug'dirgan paket olib tashlandi)
 RUN apt-get update && apt-get install -y \
     build-essential \
-    software-properties-common \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# requirements.txt faylini serverga nusxalaymiz
+# Kutubxonalarni yuklash va o'rnatish
 COPY requirements.txt .
-
-# Barcha kerakli Python kutubxonalarni o'rnatamiz
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Loyihaning qolgan barcha kodlarini server ichiga nusxalaymiz
+# Loyihaning barcha fayllarini nusxalash
 COPY . .
 
-# Serverda dashboard ochilishi uchun portni ochiq qilamiz
+# Dashboard uchun port
 EXPOSE 8501
 
-# Maxsus ishga tushirish skriptiga ruxsat beramiz
+# Skriptga ruxsat berish
 RUN chmod +x start.sh
 
-# Loyihani ishga tushirish buyrug'i
+# Ishga tushirish
 CMD ["./start.sh"]
