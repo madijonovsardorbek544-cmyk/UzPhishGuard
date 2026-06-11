@@ -3,34 +3,27 @@ import re
 import sqlite3
 import asyncio
 import logging
+import requests
 from datetime import datetime
+from difflib import SequenceMatcher
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 
-# BOT TOKENINI TO'GRIDAN-TO'G'RI KOD ICHIGA QO'YDIK
+# LOYIHA STRATEGIK KALITLARI
 BOT_TOKEN = "8654394563:AAGIYkmFLi-UMo3uxTMvZKrPn5hOXVm3bcE"
+VT_API_KEY = "eef8443f4adae9fc938c5e775c84b57df98cd93633e5539db0a8ba601231f538"
 
-# Xatoliklar va loglarni kuzatish tizimi (Logging)
 logging.basicConfig(level=logging.INFO)
 
-# Bot va Dispatcher obyektlarini yaratish
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ----------------- MA'LUMOTLAR BAZASI BILAN ISHLASH (5 va 6-qadamlar) -----------------
-
 DB_NAME = "phish_guard.db"
 
+# ----------------- MA'LUMOTLAR BAZASI -----------------
 def init_db():
-    """
-    Tizim uchun kerakli jadvallarni yaratadi:
-    1. scanned_links - barcha tahlil qilingan linklar statistikasi
-    2. blacklisted_domains - kiber-firgarlik saytlari (qora ro'yxat)
-    """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    
-    # Skaner qilingan linklar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS scanned_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,25 +35,19 @@ def init_db():
             status TEXT
         )
     """)
-    
-    # Qora ro'yxatdagi fishing domenlar jadvali
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS blacklisted_domains (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             domain TEXT UNIQUE
         )
     """)
-    
-    # Baza boshlanganda tahlil uchun unga bir nechta mashhur soxta namunalarni kiritib qo'yamiz
     sample_phishing = ["payme-bonus.ru", "click-uzbekistan.club", "telegram-premium-free.com", "olx-uz-safe.ru"]
     for domain in sample_phishing:
         cursor.execute("INSERT OR IGNORE INTO blacklisted_domains (domain) VALUES (?)", (domain,))
-        
     conn.commit()
     conn.close()
 
 def log_link(user_id, username, chat_title, url, status):
-    """Topilgan har bir linkni bazaga yozib borish funksiyasi"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -71,28 +58,87 @@ def log_link(user_id, username, chat_title, url, status):
     conn.commit()
     conn.close()
 
-def is_blacklisted(url):
-    """Link tarkibida qora ro'yxatdagi domen bor-yo'qligini tekshirish (7-qadam)"""
+def is_local_blacklisted(url):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT domain FROM blacklisted_domains")
     blacklist = [row[0] for row in cursor.fetchall()]
     conn.close()
-    
-    # Link ichidan domen nomini ajratib olamiz va solishtiramiz
     for domain in blacklist:
         if domain in url.lower():
             return True
     return False
 
-# -------------------------------------------------------------------------------------
+# ----------------- INTELLEKTUAL KIBER-ALGORITMLAR (3-BOSQICH) -----------------
 
-# Matn ichidan linklarni ajratib oluvchi funksiya (3-qadam)
+def check_virustotal(url: str) -> bool:
+    """
+    8-QADAM: VirusTotal API v3 orqali havolani global tekshirish.
+    Antiviruslar xavfli desa True qaytaradi.
+    """
+    api_url = "https://www.virustotal.com/api/v3/urls"
+    headers = {"accept": "application/json", "x-key": VT_API_KEY}
+    
+    try:
+        # 1. URLni scan qilish uchun yuboramiz
+        response = requests.post(api_url, data={"url": url}, headers=headers, timeout=10)
+        if response.status_code == 200:
+            analysis_id = response.json()["data"]["id"]
+            # 2. Tahlil natijasini tekshiramiz
+            analysis_url = f"https://www.virustotal.com/api/v3/analyses/{analysis_id}"
+            report = requests.get(analysis_url, headers=headers, timeout=10)
+            if report.status_code == 200:
+                stats = report.json()["data"]["attributes"]["stats"]
+                malicious_count = stats.get("malicious", 0) + stats.get("phishing", 0)
+                # Agar kamida 2ta xalqaro antivirus zararli desa, True (Xavfli)
+                if malicious_count >= 2:
+                    return True
+    except Exception as e:
+        print(f"VirusTotal API xatoligi: {e}")
+    return False
+
+def check_typosquatting(url: str) -> bool:
+    """
+    9-QADAM: O'zbekistondagi mashhur brendlar domenlariga
+    soxta o'xshashlikni (Typosquatting) aniqlash algoritmi.
+    """
+    official_domains = ["payme.uz", "click.uz", "uzcard.uz", "kun.uz", "id.egov.uz", "olx.uz"]
+    
+    # Havoladan domenni ajratib olish (masalan, https://payme-uz.ru/ -> payme-uz.ru)
+    clean_url = url.lower().replace("https://", "").replace("http://", "").split("/")[0]
+    
+    for official in official_domains:
+        if clean_url == official:
+            return False # Bu rasmiy sayt, xavfsiz
+            
+        # O'xshashlik foizini hisoblaymiz (SequenceMatcher yordamida)
+        similarity = SequenceMatcher(None, clean_url, official).ratio()
+        
+        # Agar o'xshashlik 70% dan baland bo'lsa, lekin xuddi o'zi bo'lmasa - bu soxta!
+        if similarity >= 0.70 and official in clean_url or (similarity >= 0.75):
+            return True
+    return False
+
+def contains_phishing_keywords(text: str) -> bool:
+    """
+    10-QADAM: Matnli Heuristic tahlil. 
+    Fishing xabarlaridagi fishing o'zbekcha kalit so'zlar.
+    """
+    keywords = ["yutuq", "mukofot", "aksiya", "tekin", "premium", "jamg'arma", "fondi", "tarqating", "omadli"]
+    text_lower = text.lower()
+    
+    # Agar xabarda kamida 2ta shubhali so'z ishtirok etsa
+    match_count = sum(1 for word in keywords if word in text_lower)
+    if match_count >= 2:
+        return True
+    return False
+
+# -----------------------------------------------------------------------------
+
 def extract_links(text: str) -> list:
     url_pattern = r'https?://[^\s]+'
     return re.findall(url_pattern, text)
 
-# Guruh va chatlardagi xabarlarni tutuvchi asosiy handler
 @dp.message()
 async def check_message_for_links(message: types.Message):
     if message.text:
@@ -105,32 +151,50 @@ async def check_message_for_links(message: types.Message):
             user_name = message.from_user.username or "Unknown"
             
             for link in detected_links:
-                # 7-QADAM: Bazadagi qora ro'yxat bilan solishtirish (Logika)
-                if is_blacklisted(link):
-                    # Link xavfli deb topildi!
-                    log_link(user_id, user_name, chat_title, link, "BLOCKED (Phishing)")
+                is_phishing = False
+                reason = ""
+                
+                # 1-Bosqich: Mahalliy qora ro'yxatni tekshirish
+                if is_local_blacklisted(link):
+                    is_phishing = True
+                    reason = "Mahalliy qora ro'yxat (Blacklist)"
                     
-                    # Xabarni o'chirish harakati
+                # 2-Bosqich: Typosquatting (Brend o'xshashligi) tekshiruvi
+                elif check_typosquatting(link):
+                    is_phishing = True
+                    reason = "Soxta brend domeni (Typosquatting)"
+                    
+                # 3-Bosqich: O'zbekcha matn tahlili
+                elif contains_phishing_keywords(text_content):
+                    is_phishing = True
+                    reason = "Shubhali fishing matni (Heuristic)"
+                    
+                # 4-Bosqich: Global VirusTotal API tekshiruvi
+                elif check_virustotal(link):
+                    is_phishing = True
+                    reason = "Global Antivirus Hisoboti (VirusTotal)"
+                
+                # YAKUNIY QAROR
+                if is_phishing:
+                    log_link(user_id, user_name, chat_title, link, f"BLOCKED ({reason})")
                     try:
                         await message.delete()
-                        # Guruhga o'zbek tilida ogohlantirish yuborish
                         await message.answer(
-                            f"🛡️ **UzPhishGuard Ogohlantirishi!**\n"
-                            f"@{user_name} yuborgan havola kiber-xavfsizlik tizimi tomonidan bloklandi!\n"
-                            f"⚠️ **Turi:** Fishing / Firgarlik sayti."
+                            f"🛡️ **UzPhishGuard Kiber-Himoya!**\n"
+                            f"@{user_name} yuborgan havola xavfsizlik tizimi tomonidan o'chirildi.\n\n"
+                            f"⚠️ **Sabab:** {reason}\n"
+                            f"💡 *Tavsiya: Shaxsiy ma'lumotlar va plastik karta kodlarini kiritmang!*"
                         )
                     except Exception as e:
-                        print(f"Xabarni o'chirishda xatolik (Bot admin emas): {e}")
+                        print(f"Xabarni o'chirishda xatolik: {e}")
+                    break # Bitta fishing link yetarli xabarni bloklashga
                 else:
-                    # Hozircha xavfsiz link
                     log_link(user_id, user_name, chat_title, link, "CLEAN (Passed)")
                     print(f"✅ Safe link logged: {link}")
 
-# Botni doimiy faol holatda ushlab turish (Polling)
 async def main():
-    # Bot ishga tushganda ma'lumotlar bazasini ham start qildiramiz
     init_db()
-    print("UzPhishGuard ma'lumotlar bazasi va kiber-logikasi muvaffaqiyatli ulandi...")
+    print("UzPhishGuard TOP-TIER kiberxavfsizlik intellekti ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
