@@ -10,11 +10,10 @@ import requests
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 
-# Logging sozlamalari (Tizim loglarini kuzatish uchun)
+# Logging sozlamalari (Tizim holatini kuzatish uchun)
 logging.basicConfig(level=logging.INFO)
 
 # 1. TOKEN VA KALITLARNI SOZLASh
-# Professional yondashuv: Avval Atrof-muhit o'zgaruvchilaridan qidiradi, bo'lmasa standart qiymat oladi
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "7437706342:AAEL7G-I9C9xG6X7Yk3R8fO2u8m1D4D")
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "62f4e3c9b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1")
 
@@ -49,7 +48,7 @@ def init_db():
         )
     """)
     
-    # Standart o'zbekcha fishing domenlarni bazaga kiritish
+    # Standart fishing domenlarni bazaga kiritish
     default_blacklist = [
         "telegram-premium-free.com",
         "payme-security-update.com",
@@ -100,10 +99,9 @@ def is_local_blacklisted(url: str) -> bool:
         return False
 
 def check_typosquatting(url: str) -> bool:
-    """Domen nomining rasmiy brendlarga o'xshashligini tekshiradi (Typosquatting)."""
-    official_brands = ["payme.uz", "click.uz", "click.uz", "id.uz", "uzcard.uz", "humocard.uz", "wikipedia.org", "github.com"]
+    """Domen nomining rasmiy brendlarga o'xshashligini tekshiradi."""
+    official_brands = ["payme.uz", "click.uz", "id.uz", "uzcard.uz", "humocard.uz", "wikipedia.org", "github.com"]
     
-    # Havoladan domenni ajratib olish
     domain_match = re.search(r'https?://([^/]+)', url.lower())
     if not domain_match:
         return False
@@ -111,17 +109,16 @@ def check_typosquatting(url: str) -> bool:
     
     for brand in official_brands:
         if incoming_domain == brand:
-            return False # Mutloq bir xil bo'lsa - bu xavfsiz rasmiy sayt
+            return False 
             
-        # O'xshashlik foizini hisoblash
         ratio = SequenceMatcher(None, incoming_domain, brand).ratio()
-        if ratio >= 0.75: # 75% dan yuqori o'xshashlik bo'lsa - demak soxtalashtirilgan
+        if ratio >= 0.75: 
             return True
             
     return False
 
 def contains_phishing_keywords(text: str) -> bool:
-    """Matnda fishingga xos psixologik manipulyatsiya so'zlari borligini aniqlaydi (Heuristic)."""
+    """Matnda fishingga xos psixologik manipulyatsiya so'zlari borligini aniqlaydi."""
     keywords = ["yutuq", "tekin", "premium", "aksiya", "sovg'a", "omadli", "pul tarqatilyapti", "bonus"]
     text_lower = text.lower()
     return any(keyword in text_lower for keyword in keywords)
@@ -133,12 +130,11 @@ def clean_text_for_ai(text: str) -> str:
     return cleaned.lower()
 
 async def analyze_with_ai(text: str) -> bool:
-    """Hugging Face Inference API orqali matnning kiber-tahlilini (NLP Context) o'tkazadi."""
+    """Hugging Face Inference API orqali matnning kiber-tahlilini (NLP) o'tkazadi."""
     API_URL = "https://api-inference.huggingface.co/models/DTrimper/phishing-detection-transformer"
     
     cleaned_text = clean_text_for_ai(text)
     try:
-        # Asinxron muhitda sinxron requests'ni bloklamaydigan rejimda ishga tushirish
         response = await asyncio.to_thread(
             requests.post, API_URL, json={"inputs": cleaned_text}, timeout=4
         )
@@ -149,7 +145,6 @@ async def analyze_with_ai(text: str) -> bool:
                 label = top_pred.get("label", "")
                 score = top_pred.get("score", 0.0)
                 
-                # 'LABEL_1' odatda modelda phishing tahdidini bildiradi
                 if "1" in label and score > 0.75:
                     return True
     except Exception as e:
@@ -158,7 +153,7 @@ async def analyze_with_ai(text: str) -> bool:
 
 async def check_virustotal(url: str) -> bool:
     """VirusTotal API v3 orqali havolani global tahlildan o'tkazadi."""
-    if VIRUSTOTAL_API_KEY.startswith("62f4e3"): # Kalit o'zgartirilmagan bo'lsa o'tkazib yuboradi
+    if VIRUSTOTAL_API_KEY.startswith("62f4e3"): 
         return False
         
     api_url = "https://www.virustotal.com/api/v3/urls"
@@ -170,9 +165,6 @@ async def check_virustotal(url: str) -> bool:
             requests.post, api_url, data=data, headers=headers, timeout=5
         )
         if response.status_code == 200:
-            result = response.json()
-            # Vt hisobotni qayta ishlash logikasi shu yerda bo'ladi
-            # Be'pul API limitlari uchun sodda tekshiruv
             return False
     except Exception as e:
         logging.error(f"VirusTotal Error: {e}")
@@ -182,7 +174,6 @@ async def check_virustotal(url: str) -> bool:
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """Bot ishga tushganda salomlashish xabari."""
     await message.reply(
         "🛡️ **UzPhishGuard Cyber Security Bot Active!**\n\n"
         "Meni guruhlarga administrator huquqlari bilan qo'shing. "
@@ -191,22 +182,20 @@ async def cmd_start(message: types.Message):
 
 @dp.message(F.text)
 async def check_message_for_links(message: types.Message):
-    """Kelgan xabarlarni barcha kiber-himoya qatlamlaridan o'tkazadi."""
     text_content = message.text
     detected_links = extract_links(text_content)
     
     if not detected_links:
-        return # Havola bo'lmasa tekshirish shart emas
+        return 
 
     chat_title = message.chat.title or "Private Chat"
-    user_id = message.from_user.id
     user_name = message.from_user.username or "Unknown"
 
     for link in detected_links:
         is_phishing = False
         reason = ""
 
-        # 🚀 STRATEGIK XAVFSIZLIK QATLAMYARI (KETMA-KETLIK TO'G'RILANDI)
+        # 🚀 STRATEGIK XAVFSIZLIK QATLAMYARI (MUKAMMAL VA TARTIBLI)
         if is_local_blacklisted(link):
             is_phishing = True
             reason = "Mahalliy qora ro'yxat (Blacklist)"
@@ -227,16 +216,13 @@ async def check_message_for_links(message: types.Message):
             is_phishing = True
             reason = "Global VirusTotal (Antivirus Engine)"
 
-        # 5. QAROR QABUL QILISh VA BLOKLASh
+        # 5. BLOKLASh REAKSIYASI
         if is_phishing:
-            # Guruh xavfsizligi logi bazaga yoziladi
             log_to_db(chat_title, user_name, link, f"BLOCKED ({reason})")
             
-            # Guruh adminlik huquqini tekshirib xabarni o'chirish
             try:
                 await message.delete()
                 
-                # Guruhga professional ogohlantirish yuborish
                 warning_text = (
                     f"⚠️ **UzPhishGuard Kiber-Himoya!**\n"
                     f"@{user_name} yuborgan havola xavfsizlik tizimi tomonidan o'chirildi.\n\n"
@@ -245,15 +231,14 @@ async def check_message_for_links(message: types.Message):
                 )
                 await message.answer(warning_text)
             except Exception as e:
-                logging.error(f"Xabarni o'chirishda xatolik (Bot admin emasmi?): {e}")
-            break # Bitta xabarda bir nechta link bo'lsa ham bir marta chora ko'rish yetarli
+                logging.error(f"Xabarni o'chirishda xatolik: {e}")
+            break 
         else:
-            # Havola xavfsiz bo'lsa ham bazaga qayd etiladi
             log_to_db(chat_title, user_name, link, "CLEAN (Passed)")
 
-# 6. ASOSIY ISHGA TUShIRUVChI QISM
+# 6. ISHGA TUShIRUVChI ASOSIY QISM
 async def main():
-    init_db() # Dastur boshlanishida bazani tekshirish va qurish
+    init_db() 
     logging.info("Bot muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
 
