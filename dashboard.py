@@ -2,99 +2,104 @@ import sqlite3
 import streamlit as pd_stream
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import os
 
-# Sahifa sozlamalari
 pd_stream.set_page_config(
-    page_title="UzPhishGuard | Kiber-Tahlil Paneli",
-    page_icon="🛡️",
+    page_title="UzPhishGuard SOC v2 | SIEM Control Center",
+    page_icon="⚡",
     layout="wide"
 )
 
 DB_NAME = "phish_guard.db"
 
-def get_dashboard_data():
-    """Ma'lumotlar bazasidan barcha skanerlash statistikasini oladi."""
+def get_v2_data():
     try:
         conn = sqlite3.connect(DB_NAME)
-        query = "SELECT scan_date, chat_title, username, url, status FROM scanned_links"
+        query = "SELECT scan_date, chat_title, username, url, status, screenshot_path, risk_score FROM scanned_links"
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df
     except Exception:
-        # Agar baza hali bo'sh bo'lsa yoki topilmasa test ma'lumot ko'rsatadi
-        return pd.DataFrame(columns=["scan_date", "chat_title", "username", "url", "status"])
+        return pd.DataFrame(columns=["scan_date", "chat_title", "username", "url", "status", "screenshot_path", "risk_score"])
 
-# Sarlavha qismi
-pd_stream.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🛡️ UzPhishGuard Real-Time Cyber Security Dashboard</h1>", unsafe_allow_html=True)
-pd_stream.markdown("<p style='text-align: center; color: #6B7280;'>Guruhlarni fishing va kiber-hujumlardan himoya qilish tizimi statistikasi</p>", unsafe_allow_html=True)
+pd_stream.markdown("<h1 style='text-align: center; color: #0F172A;'>🛡️ UzPhishGuard Next-Gen SIEM & Threat Intelligence Dashboard</h1>", unsafe_allow_html=True)
 pd_stream.write("---")
 
-df = get_dashboard_data()
+df = get_v2_data()
 
 if df.empty:
-    pd_stream.info("📊 Hozircha ma'lumotlar bazasi bo'sh. Bot guruhlarda ishlashni boshlagach, statistika shu yerda yangilanadi.")
+    pd_stream.info("📡 Tizim tinch holatda. Hujumlar aniqlanishi bilanoq kiber-xarita va tahlillar shu yerda aks etadi.")
 else:
-    # 1. METRIKALAR (Asosiy raqamlar)
-    total_scans = len(df)
-    blocked_count = df[df['status'].str.contains("BLOCKED", na=False)].shape[0]
-    clean_count = df[df['status'] == "CLEAN (Passed)"].shape[0]
+    # 1. SOC METRIKALAR & RISK SCORE CARD
+    total_events = len(df)
+    malicious = df[df['status'].str.contains("BLOCKED", na=False)]
+    total_phish = len(malicious)
     
-    col1, col2, col3 = pd_stream.columns(3)
-    with col1:
-        pd_stream.metric(label="🔎 Jami skaner qilingan havolalar", value=total_scans)
-    with col2:
-        pd_stream.metric(label="🛑 Bloklangan fishing hujumlar", value=blocked_count, delta=f"{blocked_count} ta xavf", delta_color="inverse")
-    with col3:
-        pd_stream.metric(label="✅ Xavfsiz deb topilganlar", value=clean_count)
+    # Guruh xavfsizlik indeksini hisoblash
+    safety_index = 100 if total_events == 0 else int(((total_events - total_phish) / total_events) * 100)
+    
+    c1, c2, c3, c4 = pd_stream.columns(4)
+    with c1:
+        pd_stream.metric(label="📊 Jami Scanned Trafik", value=total_events)
+    with c2:
+        pd_stream.metric(label="🛑 Tutilgan Kiber Hujumlar", value=total_phish)
+    with c3:
+        status_color = "normal" if safety_index > 80 else "inverse"
+        pd_stream.metric(label="🛡️ Tizim Xavfsizlik Indeksi", value=f"{safety_index}%", delta="Barqaror" if safety_index > 80 else "XAVFLI", delta_color=status_color)
+    with c4:
+        max_risk = df['risk_score'].max() if not df['risk_score'].empty else 0
+        pd_stream.metric(label="🔥 Eng Yuqori Hujum Kuchi", value=f"{max_risk}%")
         
     pd_stream.write("---")
     
-    # 2. GRAFIKLAR BO'LIMI
-    left_col, right_col = pd_stream.columns(2)
+    # 2. VIZUAL GRAFIKLAR (SIEM LIVE THREAT MAP ANALOGI)
+    col_left, col_right = pd_stream.columns(2)
     
-    with left_col:
-        pd_stream.subheader("📊 Havolalar holati nisbati")
-        # Statuslarni chiroyli guruhlash
-        df['Analiz Natijasi'] = df['status'].apply(lambda x: "Fishing (Bloklandi)" if "BLOCKED" in str(x) else "Xavfsiz (O'tkazildi)")
-        fig_pie = px.pie(df, names='Analiz Natijasi', color='Analiz Natijasi',
-                         color_discrete_map={"Fishing (Bloklandi)": "#EF4444", "Xavfsiz (O'tkazildi)": "#10B981"},
-                         hole=0.4)
-        pd_stream.plotly_chart(fig_pie, use_container_width=True)
+    with col_left:
+        pd_stream.subheader("📈 Kiber-Hujumlar Vaqt Kesimida Grafigi")
+        df['scan_date'] = pd.to_datetime(df['scan_date'])
+        df_timeline = df.set_index('scan_date').resample('min').count().reset_index()
+        fig_line = px.line(df_timeline, x='scan_date', y='url', title="Hujumlar Oqimi (Real-Time Timeline)", labels={'url': 'Hujumlar Soni'}, color_discrete_sequence=["#EF4444"])
+        pd_stream.plotly_chart(fig_line, use_container_width=True)
         
-    with right_col:
-        pd_stream.subheader("🛑 Aniqlangan fishing turlari (Metodlar)")
-        # Faqat bloklanganlarni filterlash
-        blocked_df = df[df['status'].str.contains("BLOCKED", na=False)].copy()
-        if not blocked_df.empty:
-            def extract_reason(status_str):
-                if "(" in status_str and ")" in status_str:
-                    return status_str.split("(")[1].split(")")[0]
-                return "Boshqa"
-            
-            blocked_df['Metod'] = blocked_df['status'].apply(extract_reason)
-            reason_counts = blocked_df['Metod'].value_counts().reset_index()
-            reason_counts.columns = ['Kiber-Metod', 'Soni']
-            
-            fig_bar = px.bar(reason_counts, x='Kiber-Metod', y='Soni', color='Kiber-Metod',
-                             title="Qaysi himoya qatlami ko'p xavfni ushladi?",
-                             color_discrete_sequence=px.colors.sequential.Reds_r)
-            pd_stream.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            pd_stream.info("Hozircha guruhlarda birorta ham fishing xavfi aniqlanmadi.")
+    with col_right:
+        pd_stream.subheader("👤 User Risk Score Card (Eng ko'p havola yuboruvchilar)")
+        user_counts = df['username'].value_counts().reset_index()
+        user_counts.columns = ['Foydalanuvchi', 'Yuborilgan Havolalar Soni']
+        fig_user = px.bar(user_counts, x='Yuborilgan Havolalar Soni', y='Foydalanuvchi', orientation='h', title="Top Traffic Creators", color='Yuborilgan Havolalar Soni', color_continuous_scale=px.colors.sequential.Blugrn)
+        pd_stream.plotly_chart(fig_user, use_container_width=True)
 
     pd_stream.write("---")
     
-    # 3. JONLI JURNAL (LATEST LOGS)
-    pd_stream.subheader("📋 Oxirgi skanerlash harakatlarining jonli jurnali")
+    # 3. 2-BOSQICH: ZERO-DAY SANDBOX SCREENSHOT VIEWER
+    pd_stream.subheader("🌐 Zero-Day Sandbox Screenshot Viewer")
+    sandbox_df = df[df['screenshot_path'].notna() & (df['screenshot_path'] != "")]
     
-    # Jadvalni chiroyli ko'rinishga keltirish
-    display_df = df.sort_index(ascending=False).rename(columns={
-        "scan_date": "Skaner vaqti",
-        "chat_title": "Guruh nomi",
-        "username": "Foydalanuvchi",
-        "url": "Tekshirilgan Havola",
-        "status": "Tizim Qarori"
+    if not sandbox_df.empty:
+        selected_url = pd_stream.selectbox("AI tomonidan skrinshot qilingan fishing saytini tanlang:", sandbox_df['url'].unique())
+        img_row = sandbox_df[sandbox_df['url'] == selected_url].iloc[0]
+        
+        if os.path.exists(img_row['screenshot_path']):
+            c_img, c_det = pd_stream.columns([2, 1])
+            with c_img:
+                pd_stream.image(img_row['screenshot_path'], caption=f"Fishing saytining jonli skrinshoti: {selected_url}", use_column_width=True)
+            with c_det:
+                pd_stream.info(f"📋 **Sandbox Detallari:**\n\n* **Skaner vaqti:** {img_row['scan_date']}\n* **Guruh:** {img_row['chat_title']}\n* **Tarqatuvchi:** @{img_row['username']}\n* **Xavf darajasi:** {img_row['risk_score']}%")
+        else:
+            pd_stream.warning("Skrinshot fayli serverda topilmadi.")
+    else:
+        pd_stream.info("Sandbox hozircha bo'sh. Fishing havolalar tutilganda ularning skrinshotlari shu yerda chiqadi.")
+
+    pd_stream.write("---")
+    
+    # 4. LIVE LOGS JURNALI
+    pd_stream.subheader("📋 SIEM Jonli Hodisalar Jurnali (Latest Logs)")
+    log_df = df.sort_index(ascending=False).rename(columns={
+        "scan_date": "Skaner Vaqti",
+        "chat_title": "Guruh Nomi",
+        "username": "Foydalanuvchi Akkaunti",
+        "url": "Tekshirilgan URL",
+        "status": "Tizim Qarori (Status)",
+        "risk_score": "Xavf Darajasi"
     })
-    
-    pd_stream.dataframe(display_df, use_container_width=True)
+    pd_stream.dataframe(log_df, use_container_width=True)
