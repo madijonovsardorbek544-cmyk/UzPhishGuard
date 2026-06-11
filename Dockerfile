@@ -21,6 +21,6 @@ EXPOSE 8501
 
 # Skriptga ruxsat berish
 RUN chmod +x start.sh
-
+CMD python main.py & streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
 # Ishga tushirish
 CMD ["./start.sh"]
