@@ -1,23 +1,39 @@
-# 1. Eng barqaror va barcha paketlar ichida tayyor bo'lgan rasmiy Python imiji
-FROM python:3.10
+FROM python:3.10-slim
 
-# 2. Konteyner ichida ishchi papka yaratamiz
+# Tizim paketlarini yangilash va Playwright uchun kerakli kutubxonalarni o'rnatish
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    curl \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixees3 \
+    librandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# 3. Bog'liqliklar ro'yxatini va loyiha fayllarini konteynerga nusxalaymiz
 COPY requirements.txt .
-
-# 4. Python kutubxonalarini tezkor o'rnatamiz
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Qolgan barcha kodlarni nusxalash
+# Playwright brauzerlarini o'rnatish
+RUN playwright install chromium
+RUN playwright install-deps
+
 COPY . .
 
-# 6. Veb-sayt portini ochamiz
-EXPOSE 8501
-
-# 7. start.sh skriptiga ruxsat berish
 RUN chmod +x start.sh
 
-# 8. Konteyner yonganda start.sh skriptini ishga tushiramiz
 CMD ["./start.sh"]
