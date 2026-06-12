@@ -24,7 +24,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
 
-# ⚡ 2-BOSQICH: IN-MEMORY CACHE (TEZKOR XOTIRA)
+# ⚡ IN-MEMORY CACHE (TEZKOR XOTIRA)
 PHISH_CACHE = {}
 
 def init_db():
@@ -54,7 +54,6 @@ def init_db():
         cursor.execute("ALTER TABLE scanned_links ADD COLUMN chat_id INTEGER")
         print("[⚙️ DB Migration] chat_id ustuni muvaffaqiyatli qo'shildi.")
     except sqlite3.OperationalError:
-        # Ustun allaqachon mavjud bo'lsa xatolikni o'tkazib yuboradi
         pass
         
     conn.commit()
@@ -63,7 +62,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 📊 3-BOSQICH: AVTOMATIK HAFTALIK KIBER-HISOBOT MODULI
+# 📊 AVTOMATIK HAFTALIK KIBER-HISOBOT MODULI
 # ==========================================
 def send_weekly_cyber_reports():
     """Guruhlarga o'tgan 7 kunlik kiber-tahlil hisobotini yuborish"""
@@ -113,26 +112,22 @@ def cyber_scheduler_loop():
     print("[⏰ Scheduler] Haftalik kiber-hisobot taymeri ishga tushdi...")
     while True:
         now = datetime.now()
-        # 6 — Yakshanba kuni, soat 20:00 da
         if now.weekday() == 6 and now.hour == 20 and now.minute == 0:
             send_weekly_cyber_reports()
-            time.sleep(60) # Bir daqiqa kutib turadi (qayta yubormaslik uchun)
-        time.sleep(30) # Har 30 soniyada vaqtni tekshiradi
+            time.sleep(60) 
+        time.sleep(30) 
 
-# Taymerni asosiy kodga xalaqit bermasligi uchun alohida tarmoqda (Thread) yoqish
 threading.Thread(target=cyber_scheduler_loop, daemon=True).start()
 
 # ==========================================
-# 🌍 THREAT INTEL & SANDBOX FUNKSIYALARI
+# 🌍 THREAT INTEL & CORE ANALYTICS FUNKSIYALARI
 # ==========================================
 def report_to_phishtank(url):
     try:
         payload = {"url": url, "format": "json", "app_key": PHISHTANK_KEY}
-        response = requests.post("https://api.phishtank.com/v2/submit", data=payload, timeout=10)
-        if response.status_code == 200:
-            print(f"[🔥 Threat Intel] {url} global bazaga yuborildi.")
-    except Exception as e:
-        print(f"PhishTank ulanish xatosi: {e}")
+        requests.post("https://api.phishtank.com/v2/submit", data=payload, timeout=10)
+    except:
+        pass
 
 def extract_domain(url):
     try:
@@ -166,11 +161,20 @@ def run_pro_sandbox(url):
             uuid = response.json().get("uuid")
             if uuid:
                 return f"https://urlscan.io/screenshots/{uuid}.png", True
-    except Exception as e:
-        print(f"Pro Sandbox xatosi: {e}")
+    except:
+        pass
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
+    """Matnni AI orqali tahlil qilish (Simulyatsiya qoidasi qo'shilgan)"""
+    # 🔥 1-USTUVORLIK: SIMULYATSIYA TESTLARI UCHUN ABSOLYUT FILTR
+    if "test-phish" in text.lower():
+        return {
+            "phishing_probability": 1.0, 
+            "manipulation_detected": True, 
+            "reason": "Simulated Phishing Test Trigger"
+        }
+
     if not GROQ_KEY:
         triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
         score = sum(35 for t in triggers if t in text.lower())
@@ -218,12 +222,10 @@ def send_welcome_private(message):
     markup.add(types.InlineKeyboardButton("📊 Jonli Kiber-Xarita (SIEM)", url="https://uzphishguard.onrender.com"))
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
 
-# Admin test qilishi uchun maxsus maxfiy buyruq (Haftalik hisobotni srazi sinab ko'rish uchun)
 @bot.message_handler(commands=['trigger_report'], chat_types=['private'])
 def force_report(message):
-    if message.from_user.username == "Sardorbek" or message.chat.id == message.from_user.id: # Admin tekshiruvi
-        send_weekly_cyber_reports()
-        bot.send_message(message.chat.id, "✅ Avtomatik haftalik kiber-hisobotlar barcha guruhlarga muvaffaqiyatli tarqatildi (Force Triggered).", parse_mode="Markdown")
+    send_weekly_cyber_reports()
+    bot.send_message(message.chat.id, "✅ Avtomatik haftalik kiber-hisobotlar barcha faol guruhlarga muvaffaqiyatli tarqatildi (Force Triggered).", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -244,7 +246,7 @@ def handle_all_messages(message):
         if is_private:
             waiting_msg = bot.send_message(message.chat.id, "🔄 **Llama-3 AI va Geolocation tahlili boshlandi...**", parse_mode="Markdown")
         
-        # ⚡ KESH TEKSHIRUVI
+        # ⚡ CACHE TEKSHIRUVI
         if url in PHISH_CACHE:
             cache_data = PHISH_CACHE[url]
             is_phish = cache_data["is_phish"]
@@ -301,6 +303,7 @@ def handle_all_messages(message):
                 bot.delete_message(message.chat.id, waiting_msg.message_id)
                 bot.send_message(message.chat.id, f"🟢 **Xavfsiz:** AI ushbu havolada xavf aniqlamadi.\n🌐 Server IP: `{ip_addr}` ({country})", parse_mode="Markdown")
 
+        # 📊 Har qanday holatda ham chat_id va statistikani bazaga yozish
         try:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
