@@ -1,17 +1,24 @@
 import os
 import re
+import socket
 import sqlite3
 import telebot
 import requests
-import time
+import json
+import google.generativeai as genai
 from datetime import datetime
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 URLSCAN_KEY = os.getenv("URLSCAN_API_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if not BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN topilmadi!")
+
+# Gemini AI konfiguratsiyasi
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
@@ -28,7 +35,11 @@ def init_db():
             url TEXT,
             status TEXT,
             screenshot_path TEXT,
-            risk_score INTEGER
+            risk_score INTEGER,
+            ip_address TEXT,
+            country TEXT,
+            latitude REAL,
+            longitude REAL
         )
     ''')
     conn.commit()
@@ -36,10 +47,38 @@ def init_db():
 
 init_db()
 
-def clean_text_regex(text):
-    if not text:
-        return ""
-    return re.sub(re.compile(r'(?<!\w)[._\s]+(?!\w)'), '', text).strip()
+def extract_domain(url):
+    """URL ichidan faqat domen nomini ajratib olish"""
+    try:
+        domain = url.split("//")[-1].split("/")[0].split("?")[0]
+        return domain
+    except:
+        return None
+
+def get_ip_geo_details(url):
+    """Domendan IP manzil va Geolokatsiya koordinatalarini aniqlash (1-QADAM)"""
+    domain = extract_domain(url)
+    if not domain:
+        return "0.0.0.0", "Unknown", 0.0, 0.0
+    
+    try:
+        # 1. Soket orqali IP manzilni aniqlash
+        ip_address = socket.gethostbyname(domain)
+        
+        # 2. IP-API orqali Geolokatsiyani olish
+        geo_res = requests.get(f"http://ip-api.com/json/{ip_address}?fields=status,country,lat,lon", timeout=5)
+        if geo_res.status_code == 200:
+            geo_data = geo_res.json()
+            if geo_data.get("status") == "success":
+                return (
+                    ip_address,
+                    geo_data.get("country", "Unknown"),
+                    geo_data.get("lat", 0.0),
+                    geo_data.get("lon", 0.0)
+                )
+        return ip_address, "Unknown", 0.0, 0.0
+    except:
+        return "0.0.0.0", "Unknown", 0.0, 0.0
 
 def run_pro_sandbox(url):
     """Enterprise Sandbox mantiqi"""
@@ -62,92 +101,53 @@ def run_pro_sandbox(url):
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
-    cleaned = clean_text_regex(text)
-    triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
-    score = 0
-    for trigger in triggers:
-        if trigger in cleaned.lower():
-            score += 35
-            
-    if score >= 70:
-        return {"phishing_probability": 0.95, "manipulation_detected": True, "reason": "AI Contextual NLP"}
-    return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "Clean"}
+    """2-QADAM: Google Gemini NLP Contextual AI tahlili"""
+    if not GEMINI_KEY:
+        # Fallback (Agar Gemini kaliti o'rnatilmagan bo'lsa oldingi mantiq ishlaydi)
+        triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
+        score = sum(35 for t in triggers if t in text.lower())
+        if score >= 70:
+            return {"phishing_probability": 0.95, "manipulation_detected": True, "reason": "Heuristic Trigger Match"}
+        return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "Clean"}
 
-
-# ---------------- [YANGI: SHAXSIY CHAT BUYRUQLARI] ----------------
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        prompt = (
+            "Siz professional kiberxavfsizlik SOC tahlilchisiz. Kelgan o'zbekcha xabarni tahlil qilib, "
+            "unda fishing (parol, profil yoki karta o'g'riligi), soxta yutuqli aksiyalar yoki firgarlik manipulyatsiyasi "
+            "bor-yo'qligini aniqlang. Javobni FAQAT va FAQAT quyidagi JSON formatida qaytaring, ortiqcha matn qo'shmang:\n"
+            '{"phishing_probability": 0.95, "manipulation_detected": true, "reason": "Sababi short o\'zbekcha"}\n\n'
+            f"Xabar matni: {text}"
+        )
+        response = model.generate_content(prompt)
+        # JSONni ajratib olish va o'qish
+        match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except Exception as e:
+        print(f"Gemini AI Error: {e}")
+    
+    return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "AI Error Fallback"}
 
 @bot.message_handler(commands=['start', 'help'], chat_types=['private'])
 def send_welcome_private(message):
-    """Foydalanuvchi shaxsan botga start berganda chiqadigan professional menyu"""
     bot_info = bot.get_me()
-    
     welcome_text = (
         f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Tizimi** 🛡️\n\n"
         f"Assalomu alaykum, {message.from_user.first_name}!\n"
-        f"Ushbu bot guruhlarni soxta aksiyalar, yutuqlar va fishing (parol o'g'rilari) "
-        f"havolalaridan **avtomatik va real vaqt rejimida** himoya qiladi.\n\n"
-        f"🚀 **Men nimalar qila olaman?**\n"
-        f"1️⃣ **Guruh Himoyasi:** Meni guruhingizga qo'shib, admin ruxsatini bersangiz, xavfli linklarni srazi o'chiraman.\n"
-        f"2️⃣ **Shaxsiy Laboratoriya:** Menga istalgan shubhali linkni yuboring, men uni Sandbox bulutida tekshirib, skrinshotini sizga ko'rsataman!\n\n"
-        f"📊 **Jonli SIEM Dashboard:** `uzphishguard.onrender.com`"
+        f"Ushbu bot guruhlarni fishing havolalaridan **Google Gemini AI** yordamida himoya qiladi.\n\n"
+        f"🚀 **Imkoniyatlar:**\n"
+        f"1️⃣ **Guruh Himoyasi:** Meni guruhga admin qilib qo'shing.\n"
+        f"2️⃣ **Shaxsiy Laboratoriya:** Menga istalgan havolani yuborib, uning IP manzilini va global kiber xaritadagi o'rnini aniqlang!\n\n"
+        f"📊 **Jonli SIEM Dashboard va Kiber Xarita:** `uzphishguard.onrender.com`"
     )
-    
-    # Chiroyli tugmalar
     markup = InlineKeyboardMarkup()
-    add_to_group_url = f"https://t.me/{bot_info.username}?startgroup=true"
-    
-    markup.add(InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=add_to_group_url))
-    markup.add(InlineKeyboardButton("📊 SIEM Dashboard Analytics", url="https://uzphishguard.onrender.com"))
-    
+    markup.add(InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=f"https://t.me/{bot_info.username}?startgroup=true"))
+    markup.add(InlineKeyboardButton("📊 SIEM Threat Map", url="https://uzphishguard.onrender.com"))
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
 
-
-@bot.message_handler(func=lambda message: True, chat_types=['private'])
-def handle_private_link_scan(message):
-    """Foydalanuvchi shaxsan o'zi link yuborganda unga Sandbox skrinshotini qaytarish"""
-    text = message.text or message.caption
-    urls = re.findall(r'(https?://[^\s]+)', text)
-    
-    if not urls:
-        bot.send_message(
-            message.chat.id, 
-            "🔍 **Kiber-Laboratoriya Faol:** Menga tekshirish uchun biron-bir havolani (link) to'liq formatda yuboring (Masalan: `https://test-site.com`).",
-            parse_mode="Markdown"
-        )
-        return
-
-    for url in urls:
-        waiting_msg = bot.send_message(message.chat.id, "🔄 **Kiber-Skaner ishga tushdi...** Sayt sandbox serverlarida ochilmoqda, iltimos 5 soniya kuting...", parse_mode="Markdown")
-        
-        ai_res = analyze_text_ai(text)
-        ss_url, success = run_pro_sandbox(url)
-        
-        bot.delete_message(message.chat.id, waiting_msg.message_id)
-        
-        risk_score = int(ai_res["phishing_probability"] * 100)
-        status_text = "🟢 TOZA (Tavsiya etiladi)" if risk_score < 70 else "🔴 XAVFLI FISHING (Tavsiya etilmaydi!)"
-        
-        result_caption = (
-            f"🕵️‍♂️ **Skaner Natijasi:**\n"
-            f"🌐 **Havola:** {url}\n"
-            f"📊 **Xavf darajasi:** {max(risk_score, 45 if risk_score > 0 else 0)}%\n"
-            f"🛡️ **Xulosa:** {status_text}\n\n"
-            f"📸 *Orqa fondagi Sandbox ko'rinishi pastda aks etgan:* "
-        )
-        
-        if ss_url:
-            try:
-                bot.send_photo(message.chat.id, ss_url, caption=result_caption, parse_mode="Markdown")
-            except:
-                bot.send_message(message.chat.id, result_caption + "\n*(Skrinshot yuklanishda muammo bo'ldi)*", parse_mode="Markdown")
-        else:
-            bot.send_message(message.chat.id, result_caption, parse_mode="Markdown")
-
-
-# ---------------- [GURUHNAZORATI REJIMI] ----------------
-
-@bot.message_handler(func=lambda message: True, chat_types=['group', 'supergroup'])
-def handle_group_messages(message):
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
     text = message.text or message.caption
     if not text:
         return
@@ -156,47 +156,71 @@ def handle_group_messages(message):
     if not urls:
         return
 
-    chat_title = message.chat.title
+    is_private = message.chat.type == 'private'
+    chat_title = "Shaxsiy Chat" if is_private else message.chat.title
     username = message.from_user.username if message.from_user.username else message.from_user.first_name
 
     for url in urls:
+        if is_private:
+            waiting_msg = bot.send_message(message.chat.id, "🔄 **Google Gemini AI va Geolocation tahlili boshlandi...**", parse_mode="Markdown")
+        
         ai_res = analyze_text_ai(text)
         status = "CLEAN (Passed)"
         screenshot_file = None
-        risk_score = int(ai_res["phishing_probability"] * 100)
+        risk_score = int(ai_res.get("phishing_probability", 0) * 100)
         
-        if ai_res["manipulation_detected"]:
-            status = "BLOCKED (Sandbox Core Threat Analysis)"
-            risk_score = 95
+        # IP va Geolokatsiyani aniqlash (1-QADAM)
+        ip_addr, country, lat, lon = get_ip_geo_details(url)
+        
+        if ai_res.get("manipulation_detected", False):
+            status = f"BLOCKED ({ai_res.get('reason', 'AI Decision')})"
+            risk_score = max(risk_score, 95)
+            
             ss_url, success = run_pro_sandbox(url)
             if success and ss_url:
                 screenshot_file = ss_url
 
-            try:
-                bot.delete_message(message.chat.id, message.message_id)
-                alert_text = (
-                    f"🛡️ **UzPhishGuard SOC v2 (Enterprise)** 🛡️\n\n"
-                    f"⚠️ @{username} yuborgan xavfli havola o'chirildi.\n"
-                    f"🛑 **Tizim qarori:** {status}\n"
-                    f"🔥 **Xavf darajasi:** {risk_score}%\n\n"
-                    f"❗ *Kiber-Xavfsizlik:* Sayt orqa fonda Sandbox tizimida skrinshot tahlilidan o'tkazildi!"
-                )
+            if not is_private:
+                try:
+                    bot.delete_message(message.chat.id, message.message_id)
+                except:
+                    pass
+            
+            alert_text = (
+                f"🛡️ **UzPhishGuard SOC v2 (Next-Gen AI)** 🛡️\n\n"
+                f"⚠️ @{username} yuborgan xavfli havola o'chirildi/aniqlandi.\n"
+                f"🛑 **Tizim qarori:** {status}\n"
+                f"🔥 **Xavf darajasi:** {risk_score}%\n"
+                f"🌍 **Server IP & Joylashuvi:** `{ip_addr}` ({country})\n\n"
+                f"❗ *Kiber-Xavfsizlik:* Incident tafsilotlari xalqaro Threat Map xaritasiga yuklandi!"
+            )
+            
+            if is_private:
+                bot.delete_message(message.chat.id, waiting_msg.message_id)
+                if screenshot_file:
+                    bot.send_photo(message.chat.id, screenshot_file, caption=alert_text, parse_mode="Markdown")
+                else:
+                    bot.send_message(message.chat.id, alert_text, parse_mode="Markdown")
+            else:
                 bot.send_message(message.chat.id, alert_text, parse_mode="Markdown")
-            except Exception as e:
-                print(f"Xatolik: {e}")
+        else:
+            if is_private:
+                bot.delete_message(message.chat.id, waiting_msg.message_id)
+                bot.send_message(message.chat.id, f"🟢 **Xavfsiz:** Gemini AI ushbu havolada xavf aniqlamadi.\n🌐 Server IP: `{ip_addr}` ({country})", parse_mode="Markdown")
 
+        # Ma'lumotlarni bazaga koordinatalari bilan yozish
         try:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO scanned_links (scan_date, chat_title, username, url, status, screenshot_path, risk_score)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), chat_title, username, url, status, screenshot_file, risk_score))
+                INSERT INTO scanned_links (scan_date, chat_title, username, url, status, screenshot_path, risk_score, ip_address, country, latitude, longitude)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), chat_title, username, url, status, screenshot_file, risk_score, ip_addr, country, lat, lon))
             conn.commit()
             conn.close()
         except Exception as db_err:
             print(f"Baza xatosi: {db_err}")
 
 if __name__ == "__main__":
-    print("UzPhishGuard Dual-Mode (Private + Group) Engine online...")
+    print("UzPhishGuard Next-Gen Gemini AI + Threat Map Engine Online...")
     bot.infinity_polling()
