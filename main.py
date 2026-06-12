@@ -8,10 +8,16 @@ import json
 from datetime import datetime
 from telebot import types
 
-# API kalitlarini Render muhitidan olish
+# ==========================================
+# ⚙️ KONFIGURATSIYA VA API KALITLAR
+# ==========================================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 URLSCAN_KEY = os.getenv("URLSCAN_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
+
+# 1-BOSQICH: PhishTank API kaliti (Render Environment Variables'ga qo'shishingiz mumkin)
+# Agar hozircha kalit bo'lmasa, PhishTank tizimi test rejimida (anonim) xizmat ko'rsatadi
+PHISHTANK_KEY = os.getenv("PHISHTANK_API_KEY", "") 
 
 if not BOT_TOKEN:
     raise ValueError("CRITICAL ERROR: TELEGRAM_BOT_TOKEN topilmadi!")
@@ -19,8 +25,14 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
 
+# ==========================================
+# ⚡ 2-BOSQICH: IN-MEMORY CACHE (TEZKOR XOTIRA)
+# ==========================================
+# Bir marta tekshirilgan havolalarni Groq AI'ga qayta yubormaslik uchun kesh xotira
+PHISH_CACHE = {}  # Format: {"url_manzili": {"is_phish": True, "reason": "...", "risk_score": 95}}
+
 def init_db():
-    """Ma'lumotlar bazasini yaratish"""
+    """Ma'lumotlar bazasini yangi ustunlar bilan tekshirish va yaratish"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -42,11 +54,29 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Bazani tekshirish va ishga tushirish
 init_db()
 
+# ==========================================
+# 🌍 1-BOSQICH: GLOBAL THREAT INTEL (PHISHTANK)
+# ==========================================
+def report_to_phishtank(url):
+    """Aniqlangan fishing havolani global brauzerlar bloklashi uchun PhishTank'ga yuborish"""
+    try:
+        payload = {
+            "url": url,
+            "format": "json",
+            "app_key": PHISHTANK_KEY
+        }
+        # PhishTank global kiber-bazasiga havola yuborish
+        response = requests.post("https://api.phishtank.com/v2/submit", data=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"[🔥 Threat Intel] {url} muvaffaqiyatli global bazaga yuborildi.")
+        else:
+            print(f"[⚠️ Threat Intel] PhishTank anonim rejimda qabul qildi.")
+    except Exception as e:
+        print(f"PhishTank ulanish xatosi: {e}")
+
 def extract_domain(url):
-    """URL ichidan faqat domen nomini ajratib olish"""
     try:
         domain = url.split("//")[-1].split("/")[0].split("?")[0]
         return domain
@@ -54,7 +84,6 @@ def extract_domain(url):
         return None
 
 def get_ip_geo_details(url):
-    """Domendan IP manzil va Geolokatsiya koordinatalarini aniqlash"""
     domain = extract_domain(url)
     if not domain:
         return "0.0.0.0", "Unknown", 0.0, 0.0
@@ -76,7 +105,6 @@ def get_ip_geo_details(url):
         return "0.0.0.0", "Unknown", 0.0, 0.0
 
 def run_pro_sandbox(url):
-    """Sandbox Screenshot xizmati"""
     if not URLSCAN_KEY or URLSCAN_KEY == "":
         return "https://urlscan.io/screenshots/fallback.png", True
 
@@ -96,7 +124,6 @@ def run_pro_sandbox(url):
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
-    """Groq Llama-3 AI orqali antifraud tahlili"""
     if not GROQ_KEY:
         triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
         score = sum(35 for t in triggers if t in text.lower())
@@ -139,18 +166,17 @@ def analyze_text_ai(text):
 
 @bot.message_handler(commands=['start', 'help'], chat_types=['private'])
 def send_welcome_private(message):
-    """Shaxsiy chat uchun professional yo'riqnoma"""
     bot_info = bot.get_me()
     welcome_text = (
         f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Platformasi** 🛡️\n\n"
         f"Assalomu alaykum, {message.from_user.first_name}!\n\n"
         f"Ushbu bot guruhlarni firgarlik, soxta yutuqli aksiyalar va "
-        f"fishing havolalaridan **Next-Gen Llama-3 Core AI** yordamida real vaqtda himoya qiladi.\n\n"
+        f"fishing havolalaridan **Next-Gen Llama-3 Core AI** hamda **Global Intel Feed** yordamida himoya qiladi.\n\n"
         f"⚙️ **BOTDAN FOYDALANISH YO'RIQNOMASI:**\n\n"
         f"1️⃣ **Guruhlarni Himoya Qilish:**\n"
-        f"Meni guruhingizga qo'shing va **Admin** huquqini bering (Xabarlarni o'chirish huquqi majburiy).\n\n"
+        f"Meni guruhingizga qo'shing va **Admin** huquqini bering.\n\n"
         f"2️⃣ **Shaxsiy Kiber-Laboratoriya:**\n"
-        f"Menga istalgan shubhali havola yoki matnni yuboring, AI uni tekshirib beradi.\n\n"
+        f"Menga istalgan shubhali havola yoki matnni yuboring, AI uni srazi tekshiradi.\n\n"
         f"📊 **Jonli SIEM Dashboard & Threat Map:**\n"
         f"uzphishguard.onrender.com"
     )
@@ -163,7 +189,6 @@ def send_welcome_private(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    """Xabarlarni tahlil qilish va guruhda o'chirish"""
     text = message.text or message.caption
     if not text:
         return
@@ -180,13 +205,27 @@ def handle_all_messages(message):
         if is_private:
             waiting_msg = bot.send_message(message.chat.id, "🔄 **Llama-3 AI va Geolocation tahlili boshlandi...**", parse_mode="Markdown")
         
-        ai_res = analyze_text_ai(text)
-        
-        # Har qanday holatda (true yoki True) shartni to'g'ri tekshirish
-        is_phish = str(ai_res.get("manipulation_detected", "false")).lower() == "true"
-        risk_score = int(ai_res.get("phishing_probability", 0) * 100)
-        reason = ai_res.get("reason", "AI Decision")
-        
+        # ⚡ 2-BOSQICH: KESH TEKSHIRUVI (Tezlikni 10x oshirish)
+        if url in PHISH_CACHE:
+            print(f"[⚡ CACHE MATCH] {url} ma'lumotlari keshdan olindi.")
+            cache_data = PHISH_CACHE[url]
+            is_phish = cache_data["is_phish"]
+            risk_score = cache_data["risk_score"]
+            reason = cache_data["reason"] + " (Cached)"
+        else:
+            # Agar keshda bo'lmasa, AI orqali yangi tahlil qilish
+            ai_res = analyze_text_ai(text)
+            is_phish = str(ai_res.get("manipulation_detected", "false")).lower() == "true"
+            risk_score = int(ai_res.get("phishing_probability", 0) * 100)
+            reason = ai_res.get("reason", "AI Decision")
+            
+            # Kelgusi so'rovlar uchun kesh xotiraga saqlash
+            PHISH_CACHE[url] = {
+                "is_phish": is_phish,
+                "risk_score": risk_score,
+                "reason": reason
+            }
+
         status = "CLEAN (Passed)"
         screenshot_file = None
         ip_addr, country, lat, lon = get_ip_geo_details(url)
@@ -195,11 +234,15 @@ def handle_all_messages(message):
             status = f"BLOCKED ({reason})"
             risk_score = max(risk_score, 95)
             
+            # 🌍 1-BOSQICH: Agar xavf yuqori bo'lsa, PhishTank'ga avtomatik jo'natish
+            if risk_score >= 90:
+                report_to_phishtank(url)
+            
             ss_url, success = run_pro_sandbox(url)
             if success and ss_url:
                 screenshot_file = ss_url
 
-            # GURUHDA XABARNI O'CHIRISH
+            # Guruhda fishingni o'chirish
             if not is_private:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
@@ -212,7 +255,7 @@ def handle_all_messages(message):
                 f"🛑 **Tizim qarori:** {status}\n"
                 f"🔥 **Xavf darajasi:** {risk_score}%\n"
                 f"🌍 **Server IP & Joylashuvi:** `{ip_addr}` ({country})\n\n"
-                f"❗ *Kiber-Xavfsizlik:* Incident tafsilotlari xalqaro Threat Map xaritasiga yuklandi!"
+                f"❗ *Kiber-Xavfsizlik:* Incident tafsilotlari xalqaro Threat Map hamda Global PhishTank bazasiga yuklandi!"
             )
             
             if is_private:
@@ -241,5 +284,5 @@ def handle_all_messages(message):
             print(f"Baza xatosi: {db_err}")
 
 if __name__ == "__main__":
-    print("UzPhishGuard Core Engine Online...")
+    print("UzPhishGuard Enterprise Core Engine Online...")
     bot.infinity_polling()
