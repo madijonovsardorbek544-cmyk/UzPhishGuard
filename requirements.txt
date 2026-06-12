@@ -1,7 +1,8 @@
-pyTelegramBotAPI
+aiogram>=3.0.0
+asyncpg>=0.29.0
+cachetools
 requests
 streamlit
 plotly
 pandas
-psycopg2-binary
-cachetools
+aiohttp
