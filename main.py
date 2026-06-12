@@ -20,7 +20,6 @@ bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
 
 def init_db():
-    """Ma'lumotlar bazasini yangi kiber-koordinatalar bilan yaratish/tekshirish"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -42,11 +41,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Bazani ishga tushirish
 init_db()
 
 def extract_domain(url):
-    """URL ichidan faqat domen nomini ajratib olish (kiber-tahlil uchun)"""
     try:
         domain = url.split("//")[-1].split("/")[0].split("?")[0]
         return domain
@@ -54,16 +51,12 @@ def extract_domain(url):
         return None
 
 def get_ip_geo_details(url):
-    """1-QADAM: Domendan IP manzil va Geolokatsiya koordinatalarini aniqlash"""
     domain = extract_domain(url)
     if not domain:
         return "0.0.0.0", "Unknown", 0.0, 0.0
     
     try:
-        # Soket orqali server IP manzilini aniqlash
         ip_address = socket.gethostbyname(domain)
-        
-        # IP-API orqali geografik joylashuvni olish
         geo_res = requests.get(f"http://ip-api.com/json/{ip_address}?fields=status,country,lat,lon", timeout=5)
         if geo_res.status_code == 200:
             geo_data = geo_res.json()
@@ -79,7 +72,6 @@ def get_ip_geo_details(url):
         return "0.0.0.0", "Unknown", 0.0, 0.0
 
 def run_pro_sandbox(url):
-    """Sandbox Screenshot Capture xizmati (Urlscan API)"""
     if not URLSCAN_KEY or URLSCAN_KEY == "":
         return "https://urlscan.io/screenshots/fallback.png", True
 
@@ -99,9 +91,7 @@ def run_pro_sandbox(url):
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
-    """2-QADAM: Groq Llama-3 AI orqali 100% kontekstual NLP antifraud tahlili"""
     if not GROQ_KEY:
-        # Fallback mantiq (Agar Groq kaliti xato bo'lsa, trigger ishlaydi)
         triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
         score = sum(35 for t in triggers if t in text.lower())
         if score >= 70:
@@ -135,7 +125,8 @@ def analyze_text_ai(text):
         if response.status_code == 200:
             result = response.json()
             ai_message = result['choices'][0]['message']['content']
-            return json.loads(ai_message)
+            parsed_json = json.loads(ai_message)
+            return parsed_json
     except Exception as e:
         print(f"Groq AI Error: {e}")
     
@@ -143,7 +134,6 @@ def analyze_text_ai(text):
 
 @bot.message_handler(commands=['start', 'help'], chat_types=['private'])
 def send_welcome_private(message):
-    """Professional Yo'riqnoma va Start paneli"""
     bot_info = bot.get_me()
     welcome_text = (
         f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Platformasi** 🛡️\n\n"
@@ -152,14 +142,11 @@ def send_welcome_private(message):
         f"fishing (profil/karta o'g'riligi) havolalaridan **Next-Gen Llama-3 Core AI** yordamida real vaqtda himoya qiladi.\n\n"
         f"⚙️ **BOTDAN FOYDALANISH YO'RIQNOMASI:**\n\n"
         f"1️⃣ **Guruhlarni Himoya Qilish (Asosiy xizmat):**\n"
-        f"Meni guruhingizga qo'shing va **Admin** huquqini bering (Xabarlarni o'chirish huquqi majburiy). "
-        f"Shundan so'ng, guruhga tashlangan har qanday shubhali havola AI tomonidan tekshirilib, "
-        f"firgarlik aniqlansa, darhol o'chiriladi va kiber-ogohlantirish yuboriladi.\n\n"
+        f"Meni guruhingizga qo'shing va **Admin** huquqini bering (Xabarlarni o'chirish huquqi majburiy).\n\n"
         f"2️⃣ **Shaxsiy Kiber-Laboratoriya:**\n"
-        f"Menga istalgan shubhali havola yoki matnni yuboring. AI uni tekshirib, server joylashgan "
-        f"IP manzilini, davlatini va global kiber-xaritadagi koordinatalarini aniqlab beradi.\n\n"
+        f"Menga istalgan shubhali havola yoki matnni yuboring. AI uni tekshirib beradi.\n\n"
         f"📊 **Jonli SIEM Dashboard & Threat Map:**\n"
-        f"Ushlangan barcha hujumlar va jonli skrinshotlarni kuzatish: uzphishguard.onrender.com"
+        f"uzphishguard.onrender.com"
     )
     
     markup = InlineKeyboardMarkup()
@@ -170,12 +157,10 @@ def send_welcome_private(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    """Guruhlar va shaxsiy chatdagi xabarlarni global real-time monitoring qilish"""
     text = message.text or message.caption
     if not text:
         return
 
-    # Matn ichidan barcha havolalarni (URL) ajratib olish
     urls = re.findall(r'(https?://[^\s]+)', text)
     if not urls:
         return
@@ -188,36 +173,35 @@ def handle_all_messages(message):
         if is_private:
             waiting_msg = bot.send_message(message.chat.id, "🔄 **Llama-3 AI va Geolocation tahlili boshlandi...**", parse_mode="Markdown")
         
-        # 1. Sun'iy intellekt tahlili
         ai_res = analyze_text_ai(text)
+        
+        # Professional tekshiruv: Katta yoki kichik harfdagi 'true'ni aniq o'qiydi
+        is_phish = str(ai_res.get("manipulation_detected", "false")).lower() == "true"
+        risk_score = int(ai_res.get("phishing_probability", 0) * 100)
+        reason = ai_res.get("reason", "AI Decision")
+        
         status = "CLEAN (Passed)"
         screenshot_file = None
-        risk_score = int(ai_res.get("phishing_probability", 0) * 100)
-        
-        # 2. Server IP va Geolokatsiyasini aniqlash
         ip_addr, country, lat, lon = get_ip_geo_details(url)
         
-        # Agar firgarlik yoki manipulyatsiya aniqlansa
-        if ai_res.get("manipulation_detected", False):
-            status = f"BLOCKED ({ai_res.get('reason', 'AI Decision')})"
+        if is_phish or risk_score >= 70:
+            status = f"BLOCKED ({reason})"
             risk_score = max(risk_score, 95)
             
-            # Orqa fonda skrinshot olish
             ss_url, success = run_pro_sandbox(url)
             if success and ss_url:
                 screenshot_file = ss_url
 
-            # Guruhdagi xavfli xabarni o'chirish
+            # Guruhdagi fishing xabarni O'CHIRISH (Eng asosiy joyi)
             if not is_private:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Xabarni o'chirishda xatolik (Adminlik huquqini tekshiring): {e}")
             
-            # Kiber-Hujum Incident Alert hisoboti
             alert_text = (
                 f"🛡️ **UzPhishGuard SOC v2 (Llama-3 Core AI)** 🛡️\n\n"
-                f"⚠️ @{username} yuborgan xavfli havola aniqlandi va bartaraf etildi.\n"
+                f"⚠️ @{username} yuborgan xavfli havola o'chirildi.\n"
                 f"🛑 **Tizim qarori:** {status}\n"
                 f"🔥 **Xavf darajasi:** {risk_score}%\n"
                 f"🌍 **Server IP & Joylashuvi:** `{ip_addr}` ({country})\n\n"
@@ -233,12 +217,10 @@ def handle_all_messages(message):
             else:
                 bot.send_message(message.chat.id, alert_text, parse_mode="Markdown")
         else:
-            # Agar havola toza bo'lsa va shaxsiy chatdan tekshirilayotgan bo'lsa
             if is_private:
                 bot.delete_message(message.chat.id, waiting_msg.message_id)
                 bot.send_message(message.chat.id, f"🟢 **Xavfsiz:** AI ushbu havolada xavf aniqlamadi.\n🌐 Server IP: `{ip_addr}` ({country})", parse_mode="Markdown")
 
-        # Hamma ma'lumotlarni (shu jumladan koordinatalarni) bazaga saqlash
         try:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
@@ -252,5 +234,5 @@ def handle_all_messages(message):
             print(f"Baza xatosi: {db_err}")
 
 if __name__ == "__main__":
-    print("UzPhishGuard Enterprise Llama-3 AI + Live Threat Map Engine Online...")
+    print("UzPhishGuard Core Engine Online...")
     bot.infinity_polling()
