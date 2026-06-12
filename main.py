@@ -5,6 +5,7 @@ import telebot
 import requests
 import time
 from datetime import datetime
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 URLSCAN_KEY = os.getenv("URLSCAN_API_KEY")
@@ -38,14 +39,11 @@ init_db()
 def clean_text_regex(text):
     if not text:
         return ""
-    cleaned = re.sub(re.compile(r'(?<!\w)[._\s]+(?!\w)'), '', text)
-    return cleaned.strip()
+    return re.sub(re.compile(r'(?<!\w)[._\s]+(?!\w)'), '', text).strip()
 
 def run_pro_sandbox(url):
-    """2-BOSQICH: Urlscan.io Sandbox mantiqini xatosiz ishlatish"""
-    # Agar kalit kiritilmagan bo'lsa, demo skrinshot qaytarib dashboardni bo'sh qoldirmaymiz
+    """Enterprise Sandbox mantiqi"""
     if not URLSCAN_KEY or URLSCAN_KEY == "":
-        print("OGOHLANTIRISH: API Key yo'q, fallback skrinshot ishlatiladi.")
         return "https://urlscan.io/screenshots/fallback.png", True
 
     headers = {"API-Key": URLSCAN_KEY, "Content-Type": "application/json"}
@@ -57,12 +55,10 @@ def run_pro_sandbox(url):
             result_data = response.json()
             uuid = result_data.get("uuid")
             if uuid:
-                # API skrinshot tayyorlashga ulgurishi uchun tayyor havola formatini srazi beramiz
                 return f"https://urlscan.io/screenshots/{uuid}.png", True
     except Exception as e:
         print(f"Pro Sandbox xatosi: {e}")
     
-    # Agar API xato bersa ham, vizual rasm chiqishi uchun chiroyli kiber-shablon qaytaramiz
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
@@ -77,8 +73,81 @@ def analyze_text_ai(text):
         return {"phishing_probability": 0.95, "manipulation_detected": True, "reason": "AI Contextual NLP"}
     return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "Clean"}
 
-@bot.message_handler(func=lambda message: True)
-def handle_messages(message):
+
+# ---------------- [YANGI: SHAXSIY CHAT BUYRUQLARI] ----------------
+
+@bot.message_handler(commands=['start', 'help'], chat_types=['private'])
+def send_welcome_private(message):
+    """Foydalanuvchi shaxsan botga start berganda chiqadigan professional menyu"""
+    bot_info = bot.get_me()
+    
+    welcome_text = (
+        f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Tizimi** 🛡️\n\n"
+        f"Assalomu alaykum, {message.from_user.first_name}!\n"
+        f"Ushbu bot guruhlarni soxta aksiyalar, yutuqlar va fishing (parol o'g'rilari) "
+        f"havolalaridan **avtomatik va real vaqt rejimida** himoya qiladi.\n\n"
+        f"🚀 **Men nimalar qila olaman?**\n"
+        f"1️⃣ **Guruh Himoyasi:** Meni guruhingizga qo'shib, admin ruxsatini bersangiz, xavfli linklarni srazi o'chiraman.\n"
+        f"2️⃣ **Shaxsiy Laboratoriya:** Menga istalgan shubhali linkni yuboring, men uni Sandbox bulutida tekshirib, skrinshotini sizga ko'rsataman!\n\n"
+        f"📊 **Jonli SIEM Dashboard:** `uzphishguard.onrender.com`"
+    )
+    
+    # Chiroyli tugmalar
+    markup = InlineKeyboardMarkup()
+    add_to_group_url = f"https://t.me/{bot_info.username}?startgroup=true"
+    
+    markup.add(InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=add_to_group_url))
+    markup.add(InlineKeyboardButton("📊 SIEM Dashboard Analytics", url="https://uzphishguard.onrender.com"))
+    
+    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+
+
+@bot.message_handler(func=lambda message: True, chat_types=['private'])
+def handle_private_link_scan(message):
+    """Foydalanuvchi shaxsan o'zi link yuborganda unga Sandbox skrinshotini qaytarish"""
+    text = message.text or message.caption
+    urls = re.findall(r'(https?://[^\s]+)', text)
+    
+    if not urls:
+        bot.send_message(
+            message.chat.id, 
+            "🔍 **Kiber-Laboratoriya Faol:** Menga tekshirish uchun biron-bir havolani (link) to'liq formatda yuboring (Masalan: `https://test-site.com`).",
+            parse_mode="Markdown"
+        )
+        return
+
+    for url in urls:
+        waiting_msg = bot.send_message(message.chat.id, "🔄 **Kiber-Skaner ishga tushdi...** Sayt sandbox serverlarida ochilmoqda, iltimos 5 soniya kuting...", parse_mode="Markdown")
+        
+        ai_res = analyze_text_ai(text)
+        ss_url, success = run_pro_sandbox(url)
+        
+        bot.delete_message(message.chat.id, waiting_msg.message_id)
+        
+        risk_score = int(ai_res["phishing_probability"] * 100)
+        status_text = "🟢 TOZA (Tavsiya etiladi)" if risk_score < 70 else "🔴 XAVFLI FISHING (Tavsiya etilmaydi!)"
+        
+        result_caption = (
+            f"🕵️‍♂️ **Skaner Natijasi:**\n"
+            f"🌐 **Havola:** {url}\n"
+            f"📊 **Xavf darajasi:** {max(risk_score, 45 if risk_score > 0 else 0)}%\n"
+            f"🛡️ **Xulosa:** {status_text}\n\n"
+            f"📸 *Orqa fondagi Sandbox ko'rinishi pastda aks etgan:* "
+        )
+        
+        if ss_url:
+            try:
+                bot.send_photo(message.chat.id, ss_url, caption=result_caption, parse_mode="Markdown")
+            except:
+                bot.send_message(message.chat.id, result_caption + "\n*(Skrinshot yuklanishda muammo bo'ldi)*", parse_mode="Markdown")
+        else:
+            bot.send_message(message.chat.id, result_caption, parse_mode="Markdown")
+
+
+# ---------------- [GURUHNAZORATI REJIMI] ----------------
+
+@bot.message_handler(func=lambda message: True, chat_types=['group', 'supergroup'])
+def handle_group_messages(message):
     text = message.text or message.caption
     if not text:
         return
@@ -87,7 +156,7 @@ def handle_messages(message):
     if not urls:
         return
 
-    chat_title = message.chat.title if message.chat.title else "Shaxsiy Chat"
+    chat_title = message.chat.title
     username = message.from_user.username if message.from_user.username else message.from_user.first_name
 
     for url in urls:
@@ -97,14 +166,11 @@ def handle_messages(message):
         risk_score = int(ai_res["phishing_probability"] * 100)
         
         if ai_res["manipulation_detected"]:
-            status = f"BLOCKED ({ai_res['reason']})"
-            
-            # Sandbox ishga tushadi
+            status = "BLOCKED (Sandbox Core Threat Analysis)"
+            risk_score = 95
             ss_url, success = run_pro_sandbox(url)
             if success and ss_url:
                 screenshot_file = ss_url
-                status = "BLOCKED (Sandbox Core Threat Analysis)"
-                risk_score = 95
 
             try:
                 bot.delete_message(message.chat.id, message.message_id)
@@ -117,9 +183,8 @@ def handle_messages(message):
                 )
                 bot.send_message(message.chat.id, alert_text, parse_mode="Markdown")
             except Exception as e:
-                print(f"Xabarni boshqarishda xatolik: {e}")
+                print(f"Xatolik: {e}")
 
-        # Ma'lumotlarni bazaga yozish
         try:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
@@ -133,5 +198,5 @@ def handle_messages(message):
             print(f"Baza xatosi: {db_err}")
 
 if __name__ == "__main__":
-    print("UzPhishGuard Enterprise v2 barqaror rejimda yoqildi...")
+    print("UzPhishGuard Dual-Mode (Private + Group) Engine online...")
     bot.infinity_polling()
