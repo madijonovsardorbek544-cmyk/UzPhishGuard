@@ -152,7 +152,7 @@ async def save_incident(group_id: int, chat_title: str, user_id: str, username: 
     """Markaziy PostgreSQL bazasiga asinxron Pooler orqali xavfsiz yozish."""
     global db_pool
     if not db_pool:
-        logger.error("Ma'lumotlar bazasi ulanishlar hovuzi mavjud emas!")
+        logger.error("Ma'lumotlar bazasi ulanishlar hovuzi ma'lumot uzatish uchun mavjud emas!")
         return
     try:
         async with db_pool.acquire() as conn:
@@ -230,7 +230,7 @@ async def monitor_messages(message: types.Message):
             geo_data = {"ip": "0.0.0.0", "country": "Safe Source", "lat": 41.311081, "lon": 69.240562} # Standart Toshkent koordinatasi
             await save_incident(message.chat.id, chat_title, message.from_user.id, username, url, "SAFE", 0.0, geo_data)
 
-async main():
+async def main():
     global db_pool
     logger.info("Database Pooler ishga tushirilmoqda...")
     try:
