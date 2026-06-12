@@ -6,7 +6,7 @@ import telebot
 import requests
 import json
 from datetime import datetime
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot import types
 
 # API kalitlarini Render muhitidan olish
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -20,6 +20,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
 
 def init_db():
+    """Ma'lumotlar bazasini yaratish"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -41,9 +42,11 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Bazani tekshirish va ishga tushirish
 init_db()
 
 def extract_domain(url):
+    """URL ichidan faqat domen nomini ajratib olish"""
     try:
         domain = url.split("//")[-1].split("/")[0].split("?")[0]
         return domain
@@ -51,6 +54,7 @@ def extract_domain(url):
         return None
 
 def get_ip_geo_details(url):
+    """Domendan IP manzil va Geolokatsiya koordinatalarini aniqlash"""
     domain = extract_domain(url)
     if not domain:
         return "0.0.0.0", "Unknown", 0.0, 0.0
@@ -72,6 +76,7 @@ def get_ip_geo_details(url):
         return "0.0.0.0", "Unknown", 0.0, 0.0
 
 def run_pro_sandbox(url):
+    """Sandbox Screenshot xizmati"""
     if not URLSCAN_KEY or URLSCAN_KEY == "":
         return "https://urlscan.io/screenshots/fallback.png", True
 
@@ -91,6 +96,7 @@ def run_pro_sandbox(url):
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
+    """Groq Llama-3 AI orqali antifraud tahlili"""
     if not GROQ_KEY:
         triggers = ["aksiya", "yutuq", "bepul", "telegram", "premium", "sovg", "bonus", "pul tarqat", "click", "payme"]
         score = sum(35 for t in triggers if t in text.lower())
@@ -106,8 +112,8 @@ def analyze_text_ai(text):
         
         system_prompt = (
             "Siz professional kiberxavfsizlik SOC tahlilchisiz. Kelgan o'zbekcha xabarni tahlil qilib, "
-            "unda fishing (parol, karta, profil o'g'riligi), soxta aksiyalar yoki firgarlik manipulyatsiyasi "
-            "bor-yo'qligini aniqlang. Javobni FAQAT va FAQAT berilgan JSON formatida qaytaring, ortiqcha so'z qo'shmang:\n"
+            "unda fishing, soxta aksiyalar yoki firgarlik manipulyatsiyasi bor-yo'qligini aniqlang. "
+            "Javobni FAQAT va FAQAT berilgan JSON formatida qaytaring, ortiqcha so'z qo'shmang:\n"
             '{"phishing_probability": 0.95, "manipulation_detected": true, "reason": "Qisqa o\'zbekcha sababi"}'
         )
         
@@ -125,8 +131,7 @@ def analyze_text_ai(text):
         if response.status_code == 200:
             result = response.json()
             ai_message = result['choices'][0]['message']['content']
-            parsed_json = json.loads(ai_message)
-            return parsed_json
+            return json.loads(ai_message)
     except Exception as e:
         print(f"Groq AI Error: {e}")
     
@@ -134,29 +139,31 @@ def analyze_text_ai(text):
 
 @bot.message_handler(commands=['start', 'help'], chat_types=['private'])
 def send_welcome_private(message):
+    """Shaxsiy chat uchun professional yo'riqnoma"""
     bot_info = bot.get_me()
     welcome_text = (
         f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Platformasi** 🛡️\n\n"
         f"Assalomu alaykum, {message.from_user.first_name}!\n\n"
-        f"Ushbu bot o'zbek kiber-hududidagi guruhlarni firgarlik, soxta yutuqli aksiyalar va "
-        f"fishing (profil/karta o'g'riligi) havolalaridan **Next-Gen Llama-3 Core AI** yordamida real vaqtda himoya qiladi.\n\n"
+        f"Ushbu bot guruhlarni firgarlik, soxta yutuqli aksiyalar va "
+        f"fishing havolalaridan **Next-Gen Llama-3 Core AI** yordamida real vaqtda himoya qiladi.\n\n"
         f"⚙️ **BOTDAN FOYDALANISH YO'RIQNOMASI:**\n\n"
-        f"1️⃣ **Guruhlarni Himoya Qilish (Asosiy xizmat):**\n"
+        f"1️⃣ **Guruhlarni Himoya Qilish:**\n"
         f"Meni guruhingizga qo'shing va **Admin** huquqini bering (Xabarlarni o'chirish huquqi majburiy).\n\n"
         f"2️⃣ **Shaxsiy Kiber-Laboratoriya:**\n"
-        f"Menga istalgan shubhali havola yoki matnni yuboring. AI uni tekshirib beradi.\n\n"
+        f"Menga istalgan shubhali havola yoki matnni yuboring, AI uni tekshirib beradi.\n\n"
         f"📊 **Jonli SIEM Dashboard & Threat Map:**\n"
         f"uzphishguard.onrender.com"
     )
     
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=f"https://t.me/{bot_info.username}?startgroup=true"))
-    markup.add(InlineKeyboardButton("📊 Jonli Kiber-Xarita (SIEM)", url="https://uzphishguard.onrender.com"))
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=f"https://t.me/{bot_info.username}?startgroup=true"))
+    markup.add(types.InlineKeyboardButton("📊 Jonli Kiber-Xarita (SIEM)", url="https://uzphishguard.onrender.com"))
     
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
+    """Xabarlarni tahlil qilish va guruhda o'chirish"""
     text = message.text or message.caption
     if not text:
         return
@@ -175,7 +182,7 @@ def handle_all_messages(message):
         
         ai_res = analyze_text_ai(text)
         
-        # Professional tekshiruv: Katta yoki kichik harfdagi 'true'ni aniq o'qiydi
+        # Har qanday holatda (true yoki True) shartni to'g'ri tekshirish
         is_phish = str(ai_res.get("manipulation_detected", "false")).lower() == "true"
         risk_score = int(ai_res.get("phishing_probability", 0) * 100)
         reason = ai_res.get("reason", "AI Decision")
@@ -192,12 +199,12 @@ def handle_all_messages(message):
             if success and ss_url:
                 screenshot_file = ss_url
 
-            # Guruhdagi fishing xabarni O'CHIRISH (Eng asosiy joyi)
+            # GURUHDA XABARNI O'CHIRISH
             if not is_private:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
                 except Exception as e:
-                    print(f"Xabarni o'chirishda xatolik (Adminlik huquqini tekshiring): {e}")
+                    print(f"O'chirishda xatolik: {e}")
             
             alert_text = (
                 f"🛡️ **UzPhishGuard SOC v2 (Llama-3 Core AI)** 🛡️\n\n"
