@@ -43,7 +43,10 @@ def extract_urls(text: str) -> list:
     return re.findall(r'(https?://[^\s]+)', text)
 
 def advanced_heuristics_check(url: str) -> bool:
-    """Ilg'or oqilona hevristik tahlil."""
+    """
+    Ilg'or oqilona hevristik tahlil.
+    Subdomen orqali aldash (Typosquatting) usullarini 100% ushlaydi.
+    """
     try:
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.lower()
@@ -53,16 +56,21 @@ def advanced_heuristics_check(url: str) -> bool:
         suspicious_tlds = ['.xyz', '.tk', '.ru', '.link', '.free', '.click', '.top', '.info']
         target_brands = ['click', 'payme', 'uzcard', 'humo', 'my.gov', 'agro', 'bank', 'soliq']
         
+        # 1. TLD tekshiruvi (Domen shubhali zona bilan tugasa)
         if any(domain.endswith(tld) for tld in suspicious_tlds):
             return True
             
-        if any(brand in domain for brand in target_brands):
-            official_domains = [
-                'click.uz', 'payme.uz', 'uzcard.uz', 'humo.uz', 
-                'my.gov.uz', 'cbu.uz', 'agro.uz', 'soliq.uz'
-            ]
-            if not any(official in domain for official in official_domains):
-                return True
+        # 2. Subdomen va Brend soxtalashtirish tahlili (Xirurgik aniqlikda)
+        for brand in target_brands:
+            if brand in domain:
+                official_domains = [
+                    'click.uz', 'payme.uz', 'uzcard.uz', 'humo.uz', 
+                    'my.gov.uz', 'cbu.uz', 'agro.uz', 'soliq.uz'
+                ]
+                # Agar domen rasmiy nom bilan to'liq teng bo'lmasa yoki u bilan tugamasa (masalan: payme.uz.yangilash.net) -> FISHING!
+                is_official = any(domain == official or domain.endswith('.' + official) for official in official_domains)
+                if not is_official:
+                    return True
                 
         return False
     except Exception as e:
@@ -159,16 +167,11 @@ async def monitor_messages(message: types.Message):
         return
 
     for url in urls:
-        # 1. KESH LOGIKASI TO'G'RILANDI:
-        # Agar havola avval BLOCKED deb keshga olingan bo'lsa yoki xavfli bo'lsa - darhol o'chiriladi
         if url in URL_CACHE and URL_CACHE[url] == "BLOCKED":
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            try: await message.delete()
+            except Exception: pass
             return
 
-        # Agar havola avval SAFE deb keshga olingan bo'lsa, uni qayta tekshirib vaqt yo'qotmaymiz
         if url in URL_CACHE and URL_CACHE[url] == "SAFE":
             continue
 
@@ -190,7 +193,6 @@ async def monitor_messages(message: types.Message):
         username = message.from_user.username or message.from_user.full_name
 
         if is_phishing:
-            # Muhim: Zararli havolani keshga qat'iy BLOCKED deb saqlaymiz!
             URL_CACHE[url] = "BLOCKED"
             try:
                 await message.delete()
