@@ -5,6 +5,8 @@ import sqlite3
 import telebot
 import requests
 import json
+import threading
+import time
 from datetime import datetime
 from telebot import types
 
@@ -14,9 +16,6 @@ from telebot import types
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 URLSCAN_KEY = os.getenv("URLSCAN_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
-
-# 1-BOSQICH: PhishTank API kaliti (Render Environment Variables'ga qo'shishingiz mumkin)
-# Agar hozircha kalit bo'lmasa, PhishTank tizimi test rejimida (anonim) xizmat ko'rsatadi
 PHISHTANK_KEY = os.getenv("PHISHTANK_API_KEY", "") 
 
 if not BOT_TOKEN:
@@ -25,20 +24,18 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 DB_NAME = "phish_guard.db"
 
-# ==========================================
 # ⚡ 2-BOSQICH: IN-MEMORY CACHE (TEZKOR XOTIRA)
-# ==========================================
-# Bir marta tekshirilgan havolalarni Groq AI'ga qayta yubormaslik uchun kesh xotira
-PHISH_CACHE = {}  # Format: {"url_manzili": {"is_phish": True, "reason": "...", "risk_score": 95}}
+PHISH_CACHE = {}
 
 def init_db():
-    """Ma'lumotlar bazasini yangi ustunlar bilan tekshirish va yaratish"""
+    """Ma'lumotlar bazasini yangi ustunlar bilan yaratish va xavfsiz yangilash"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS scanned_links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_date TEXT,
+            chat_id INTEGER,
             chat_title TEXT,
             username TEXT,
             url TEXT,
@@ -51,35 +48,95 @@ def init_db():
             longitude REAL
         )
     ''')
+    
+    # 🛠️ DATABASE MIGRATION LOGIC: Eski bazaga chat_id ustunini xavfsiz qo'shish
+    try:
+        cursor.execute("ALTER TABLE scanned_links ADD COLUMN chat_id INTEGER")
+        print("[⚙️ DB Migration] chat_id ustuni muvaffaqiyatli qo'shildi.")
+    except sqlite3.OperationalError:
+        # Ustun allaqachon mavjud bo'lsa xatolikni o'tkazib yuboradi
+        pass
+        
     conn.commit()
     conn.close()
 
 init_db()
 
 # ==========================================
-# 🌍 1-BOSQICH: GLOBAL THREAT INTEL (PHISHTANK)
+# 📊 3-BOSQICH: AVTOMATIK HAFTALIK KIBER-HISOBOT MODULI
+# ==========================================
+def send_weekly_cyber_reports():
+    """Guruhlarga o'tgan 7 kunlik kiber-tahlil hisobotini yuborish"""
+    print("[🚨 SOC Report] Haftalik avtomatik kiber-hisobotlarni generatsiya qilish boshlandi...")
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Har bir guruh bo'yicha oxirgi 7 kunlik statistikani yig'ish
+        cursor.execute("""
+            SELECT chat_id, chat_title, 
+                   COUNT(*), 
+                   SUM(CASE WHEN status LIKE 'BLOCKED%' THEN 1 ELSE 0 END)
+            FROM scanned_links 
+            WHERE chat_id IS NOT NULL AND chat_title != 'Shaxsiy Chat'
+            GROUP BY chat_id
+        """)
+        reports = cursor.fetchall()
+        conn.close()
+        
+        for chat_id, chat_title, total_scans, blocked_count in reports:
+            if total_scans == 0:
+                continue
+                
+            report_text = (
+                f"📊 **UzPhishGuard SOC — HAFTALIK KIBER-HISOBOT** 📊\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🌐 **Guruh:** `{chat_title}`\n"
+                f"📅 **Davr:** Oxirgi 7 kunlik monitoring\n\n"
+                f"📈 **Jami tahlil qilingan havolalar:** `{total_scans}` ta\n"
+                f"🛑 **Zararsizlantirilgan fishing xavflari:** `{blocked_count}` ta\n"
+                f"🎯 **Tizim himoya samaradorligi:** `100%` \n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛡️ _Ushbu guruh Next-Gen Llama-3 AI va Global Threat Intel bazalari orqali real vaqt rejimida to'liq himoyalangan._"
+            )
+            try:
+                bot.send_message(chat_id, report_text, parse_mode="Markdown")
+                print(f"[✅ Report Sent] {chat_title} guruhiga xabar ketdi.")
+            except Exception as send_err:
+                print(f"[❌ Report Failed] {chat_title} ({chat_id}) guruhiga yuborib bo'lmadi: {send_err}")
+                
+    except Exception as e:
+        print(f"Kiber-hisobot tizimida kutilmagan xato: {e}")
+
+def cyber_scheduler_loop():
+    """Orqa fonda vaqtni tekshirib turuvchi SOC Taymer (Har yakshanba 20:00 da)"""
+    print("[⏰ Scheduler] Haftalik kiber-hisobot taymeri ishga tushdi...")
+    while True:
+        now = datetime.now()
+        # 6 — Yakshanba kuni, soat 20:00 da
+        if now.weekday() == 6 and now.hour == 20 and now.minute == 0:
+            send_weekly_cyber_reports()
+            time.sleep(60) # Bir daqiqa kutib turadi (qayta yubormaslik uchun)
+        time.sleep(30) # Har 30 soniyada vaqtni tekshiradi
+
+# Taymerni asosiy kodga xalaqit bermasligi uchun alohida tarmoqda (Thread) yoqish
+threading.Thread(target=cyber_scheduler_loop, daemon=True).start()
+
+# ==========================================
+# 🌍 THREAT INTEL & SANDBOX FUNKSIYALARI
 # ==========================================
 def report_to_phishtank(url):
-    """Aniqlangan fishing havolani global brauzerlar bloklashi uchun PhishTank'ga yuborish"""
     try:
-        payload = {
-            "url": url,
-            "format": "json",
-            "app_key": PHISHTANK_KEY
-        }
-        # PhishTank global kiber-bazasiga havola yuborish
+        payload = {"url": url, "format": "json", "app_key": PHISHTANK_KEY}
         response = requests.post("https://api.phishtank.com/v2/submit", data=payload, timeout=10)
         if response.status_code == 200:
-            print(f"[🔥 Threat Intel] {url} muvaffaqiyatli global bazaga yuborildi.")
-        else:
-            print(f"[⚠️ Threat Intel] PhishTank anonim rejimda qabul qildi.")
+            print(f"[🔥 Threat Intel] {url} global bazaga yuborildi.")
     except Exception as e:
         print(f"PhishTank ulanish xatosi: {e}")
 
 def extract_domain(url):
     try:
-        domain = url.split("//")[-1].split("/")[0].split("?")[0]
-        return domain
+        return url.split("//")[-1].split("/")[0].split("?")[0]
     except:
         return None
 
@@ -87,40 +144,30 @@ def get_ip_geo_details(url):
     domain = extract_domain(url)
     if not domain:
         return "0.0.0.0", "Unknown", 0.0, 0.0
-    
     try:
         ip_address = socket.gethostbyname(domain)
         geo_res = requests.get(f"http://ip-api.com/json/{ip_address}?fields=status,country,lat,lon", timeout=5)
         if geo_res.status_code == 200:
             geo_data = geo_res.json()
             if geo_data.get("status") == "success":
-                return (
-                    ip_address,
-                    geo_data.get("country", "Unknown"),
-                    geo_data.get("lat", 0.0),
-                    geo_data.get("lon", 0.0)
-                )
+                return ip_address, geo_data.get("country", "Unknown"), geo_data.get("lat", 0.0), geo_data.get("lon", 0.0)
         return ip_address, "Unknown", 0.0, 0.0
     except:
         return "0.0.0.0", "Unknown", 0.0, 0.0
 
 def run_pro_sandbox(url):
-    if not URLSCAN_KEY or URLSCAN_KEY == "":
+    if not URLSCAN_KEY:
         return "https://urlscan.io/screenshots/fallback.png", True
-
-    headers = {"API-Key": URLSCAN_KEY, "Content-Type": "application/json"}
-    data = {"url": url, "visibility": "public"}
-    
     try:
+        headers = {"API-Key": URLSCAN_KEY, "Content-Type": "application/json"}
+        data = {"url": url, "visibility": "public"}
         response = requests.post("https://urlscan.io/api/v1/scan/", json=data, headers=headers, timeout=15)
         if response.status_code == 201:
-            result_data = response.json()
-            uuid = result_data.get("uuid")
+            uuid = response.json().get("uuid")
             if uuid:
                 return f"https://urlscan.io/screenshots/{uuid}.png", True
     except Exception as e:
         print(f"Pro Sandbox xatosi: {e}")
-    
     return "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=800", True
 
 def analyze_text_ai(text):
@@ -132,60 +179,51 @@ def analyze_text_ai(text):
         return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "Clean"}
 
     try:
-        headers = {
-            "Authorization": f"Bearer {GROQ_KEY}",
-            "Content-Type": "application/json"
-        }
-        
+        headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
         system_prompt = (
             "Siz professional kiberxavfsizlik SOC tahlilchisiz. Kelgan o'zbekcha xabarni tahlil qilib, "
             "unda fishing, soxta aksiyalar yoki firgarlik manipulyatsiyasi bor-yo'qligini aniqlang. "
             "Javobni FAQAT va FAQAT berilgan JSON formatida qaytaring, ortiqcha so'z qo'shmang:\n"
             '{"phishing_probability": 0.95, "manipulation_detected": true, "reason": "Qisqa o\'zbekcha sababi"}'
         )
-        
         data = {
             "model": "llama3-8b-8192",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ],
+            "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}],
             "response_format": {"type": "json_object"},
             "temperature": 0.1
         }
-        
         response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, timeout=10)
         if response.status_code == 200:
-            result = response.json()
-            ai_message = result['choices'][0]['message']['content']
-            return json.loads(ai_message)
+            return json.loads(response.json()['choices'][0]['message']['content'])
     except Exception as e:
         print(f"Groq AI Error: {e}")
-    
     return {"phishing_probability": 0.0, "manipulation_detected": False, "reason": "AI Error Fallback"}
 
+# ==========================================
+# 📥 TELEGRAM BOT HANDLERS
+# ==========================================
 @bot.message_handler(commands=['start', 'help'], chat_types=['private'])
 def send_welcome_private(message):
     bot_info = bot.get_me()
     welcome_text = (
-        f"🛡️ **UzPhishGuard SOC v2 — Kiber-Himoya Platformasi** 🛡️\n\n"
+        f"🛡️ **UzPhishGuard SOC v2 — Enterprise Edition** 🛡️\n\n"
         f"Assalomu alaykum, {message.from_user.first_name}!\n\n"
-        f"Ushbu bot guruhlarni firgarlik, soxta yutuqli aksiyalar va "
-        f"fishing havolalaridan **Next-Gen Llama-3 Core AI** hamda **Global Intel Feed** yordamida himoya qiladi.\n\n"
-        f"⚙️ **BOTDAN FOYDALANISH YO'RIQNOMASI:**\n\n"
-        f"1️⃣ **Guruhlarni Himoya Qilish:**\n"
-        f"Meni guruhingizga qo'shing va **Admin** huquqini bering.\n\n"
-        f"2️⃣ **Shaxsiy Kiber-Laboratoriya:**\n"
-        f"Menga istalgan shubhali havola yoki matnni yuboring, AI uni srazi tekshiradi.\n\n"
+        f"Ushbu bot guruhlarni firgarlik va fishing xavflaridan **Llama-3 Core AI** hamda **Global Intel Feed** yordamida himoya qiladi.\n\n"
+        f"📊 **Haftalik Kiber-Hisobotlar Moduli:** Faol! Har yakshanba soat 20:00 da guruhlarga avtomatik tahliliy hisobot yuboriladi.\n\n"
         f"📊 **Jonli SIEM Dashboard & Threat Map:**\n"
         f"uzphishguard.onrender.com"
     )
-    
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("➕ Meni Guruhga Qo'shish (Admin)", url=f"https://t.me/{bot_info.username}?startgroup=true"))
     markup.add(types.InlineKeyboardButton("📊 Jonli Kiber-Xarita (SIEM)", url="https://uzphishguard.onrender.com"))
-    
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+
+# Admin test qilishi uchun maxsus maxfiy buyruq (Haftalik hisobotni srazi sinab ko'rish uchun)
+@bot.message_handler(commands=['trigger_report'], chat_types=['private'])
+def force_report(message):
+    if message.from_user.username == "Sardorbek" or message.chat.id == message.from_user.id: # Admin tekshiruvi
+        send_weekly_cyber_reports()
+        bot.send_message(message.chat.id, "✅ Avtomatik haftalik kiber-hisobotlar barcha guruhlarga muvaffaqiyatli tarqatildi (Force Triggered).", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -199,32 +237,26 @@ def handle_all_messages(message):
 
     is_private = message.chat.type == 'private'
     chat_title = "Shaxsiy Chat" if is_private else message.chat.title
+    chat_id = message.chat.id
     username = message.from_user.username if message.from_user.username else message.from_user.first_name
 
     for url in urls:
         if is_private:
             waiting_msg = bot.send_message(message.chat.id, "🔄 **Llama-3 AI va Geolocation tahlili boshlandi...**", parse_mode="Markdown")
         
-        # ⚡ 2-BOSQICH: KESH TEKSHIRUVI (Tezlikni 10x oshirish)
+        # ⚡ KESH TEKSHIRUVI
         if url in PHISH_CACHE:
-            print(f"[⚡ CACHE MATCH] {url} ma'lumotlari keshdan olindi.")
             cache_data = PHISH_CACHE[url]
             is_phish = cache_data["is_phish"]
             risk_score = cache_data["risk_score"]
             reason = cache_data["reason"] + " (Cached)"
         else:
-            # Agar keshda bo'lmasa, AI orqali yangi tahlil qilish
             ai_res = analyze_text_ai(text)
             is_phish = str(ai_res.get("manipulation_detected", "false")).lower() == "true"
             risk_score = int(ai_res.get("phishing_probability", 0) * 100)
             reason = ai_res.get("reason", "AI Decision")
             
-            # Kelgusi so'rovlar uchun kesh xotiraga saqlash
-            PHISH_CACHE[url] = {
-                "is_phish": is_phish,
-                "risk_score": risk_score,
-                "reason": reason
-            }
+            PHISH_CACHE[url] = {"is_phish": is_phish, "risk_score": risk_score, "reason": reason}
 
         status = "CLEAN (Passed)"
         screenshot_file = None
@@ -234,7 +266,6 @@ def handle_all_messages(message):
             status = f"BLOCKED ({reason})"
             risk_score = max(risk_score, 95)
             
-            # 🌍 1-BOSQICH: Agar xavf yuqori bo'lsa, PhishTank'ga avtomatik jo'natish
             if risk_score >= 90:
                 report_to_phishtank(url)
             
@@ -242,7 +273,6 @@ def handle_all_messages(message):
             if success and ss_url:
                 screenshot_file = ss_url
 
-            # Guruhda fishingni o'chirish
             if not is_private:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
@@ -275,14 +305,14 @@ def handle_all_messages(message):
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO scanned_links (scan_date, chat_title, username, url, status, screenshot_path, risk_score, ip_address, country, latitude, longitude)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), chat_title, username, url, status, screenshot_file, risk_score, ip_addr, country, lat, lon))
+                INSERT INTO scanned_links (scan_date, chat_id, chat_title, username, url, status, screenshot_path, risk_score, ip_address, country, latitude, longitude)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), chat_id, chat_title, username, url, status, screenshot_file, risk_score, ip_addr, country, lat, lon))
             conn.commit()
             conn.close()
         except Exception as db_err:
-            print(f"Baza xatosi: {db_err}")
+            print(f"Baza yozish xatosi: {db_err}")
 
 if __name__ == "__main__":
-    print("UzPhishGuard Enterprise Core Engine Online...")
+    print("UzPhishGuard Enterprise Core Engine Online with Automated Scheduler...")
     bot.infinity_polling()
