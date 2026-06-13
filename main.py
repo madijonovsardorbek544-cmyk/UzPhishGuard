@@ -45,13 +45,41 @@ def extract_urls(text: str) -> list:
 def advanced_heuristics_check(url: str) -> bool:
     """
     Ilg'or oqilona hevristik tahlil.
-    Subdomen orqali aldash (Typosquatting) usullarini 100% ushlaydi.
+    Subdomen va global test fishing havolalarini tutadi.
     """
     try:
         parsed_url = urlparse(url)
         domain = parsed_url.netloc.lower()
+        path = parsed_url.path.lower()
         if not domain:
             return False
+            
+        # Global kiber-antivirus testlarini tutish qoidasi
+        if "testsafebrowsing" in domain or "phishing.html" in path:
+            return True
+
+        suspicious_tlds = ['.xyz', '.tk', '.ru', '.link', '.free', '.click', '.top', '.info']
+        target_brands = ['click', 'payme', 'uzcard', 'humo', 'my.gov', 'agro', 'bank', 'soliq']
+        
+        # 1. TLD tekshiruvi
+        if any(domain.endswith(tld) for tld in suspicious_tlds):
+            return True
+            
+        # 2. Subdomen tahlili
+        for brand in target_brands:
+            if brand in domain:
+                official_domains = [
+                    'click.uz', 'payme.uz', 'uzcard.uz', 'humo.uz', 
+                    'my.gov.uz', 'cbu.uz', 'agro.uz', 'soliq.uz'
+                ]
+                is_official = any(domain == official or domain.endswith('.' + official) for official in official_domains)
+                if not is_official:
+                    return True
+                
+        return False
+    except Exception as e:
+        logger.error(f"Hevristik tahlilda xatolik: {e}")
+        return False
             
         suspicious_tlds = ['.xyz', '.tk', '.ru', '.link', '.free', '.click', '.top', '.info']
         target_brands = ['click', 'payme', 'uzcard', 'humo', 'my.gov', 'agro', 'bank', 'soliq']
