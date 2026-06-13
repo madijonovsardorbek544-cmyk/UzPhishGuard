@@ -1,156 +1,214 @@
 import os
-import streamlit as tf
-import psycopg2
 import pandas as pd
+import streamlit as st
 import plotly.express as px
-from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# .env yuklash
+# .env faylini yuklash
 load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Sahifa konfiguratsiyasi (Enterprise SIEM uslubida)
-tf.set_page_config(
-    page_title="UzPhishGuard SOC v2 — SIEM Center",
+# ==========================================
+# 1. SAHIFA KONFIGURATSIYASI (Enterprise rejim)
+# ==========================================
+st.set_page_config(
+    page_title="UzPhishGuard SOC | Enterprise SIEM",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# PostgreSQL (Supabase) ulanish funksiyasi
-def get_db_connection():
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        tf.error("Kritik xatolik: DATABASE_URL muhit o'zgaruvchisi topilmadi!")
-        return None
-    try:
-        conn = psycopg2.connect(db_url)
-        return conn
-    except Exception as e:
-        tf.error(f"Ma'lumotlar bazasiga ulanishda xatolik: {e}")
-        return None
+# ==========================================
+# 2. CUSTOM CSS (Neon SOC ko'rinishi uchun)
+# ==========================================
+st.markdown("""
+    <style>
+    /* Metrikalar uchun kiber-dizayn */
+    div[data-testid="metric-container"] {
+        background-color: #1a1c23;
+        padding: 15px;
+        border-radius: 12px;
+        border-left: 5px solid #ff4b4b;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    div[data-testid="metric-container"]:nth-child(1) { border-left-color: #00f2fe; }
+    div[data-testid="metric-container"]:nth-child(3) { border-left-color: #00cc96; }
+    div[data-testid="metric-container"]:nth-child(4) { border-left-color: #fecb52; }
+    </style>
+""", unsafe_allow_html=True)
 
-# Ma'lumotlarni bazadan tortib olish
+# ==========================================
+# 3. KESHLASH VA OPTIMIZATSIYA (TTL 5 soniya)
+# ==========================================
+@st.cache_data(ttl=5, show_spinner=False) 
 def load_data():
-    conn = get_db_connection()
-    if conn is None:
+    if not DATABASE_URL:
         return pd.DataFrame()
-    
-    query = """
-        SELECT id, group_id, chat_title, user_id, username, url, status, 
-               risk_score, ip_address, country, latitude, longitude, created_at 
-        FROM scanned_links 
-        ORDER BY created_at DESC;
-    """
     try:
-        df = pd.read_sql(query, conn)
-        conn.close()
-        return df
+        # Haqiqiy pro loyihalardek with operatoridan foydalanamiz
+        with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
+            query = "SELECT * FROM scanned_links ORDER BY created_at DESC;"
+            df = pd.read_sql(query, conn)
+            if not df.empty:
+                df['created_at'] = pd.to_datetime(df['created_at'])
+            return df
     except Exception as e:
-        tf.error(f"Ma'lumotlarni o'qishda xatolik (Schema mos emas): {e}")
-        if conn:
-            conn.close()
+        st.error(f"Ma'lumotlar bazasiga ulanishda xatolik: {e}")
         return pd.DataFrame()
 
-# Ma'lumotlarni yuklash
-df = load_data()
+def main():
+    # Sarlavha
+    st.markdown("<h1 style='text-align: center; color: #00F2FE; text-shadow: 0 0 15px rgba(0,242,254,0.5);'>🛡️ UzPhishGuard SOC v2 — Enterprise SIEM</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #A0AEC0; margin-bottom: 30px;'>Global kiber-tahdidlarni real vaqt rejimida kuzatish, IP boyitish va AI orqali tahlil qilish markazi</p>", unsafe_allow_html=True)
 
-# Sarlavha qismi
-tf.markdown("<h1 style='text-align: center; color: #00F2FE;'>🛡️ UzPhishGuard SOC v2 — Jonli SIEM Dashboard</h1>", unsafe_allow_html=True)
-tf.markdown("<p style='text-align: center; color: #888;'>Supabase Cloud DB va IP Enrichment orqali real vaqt rejimida ishlovchi professional kiber-tahlil markazi.</p>", unsafe_allow_html=True)
-tf.markdown("---")
+    df = load_data()
 
-if df.empty:
-    tf.info("ℹ️ Tizimda hozircha hech qanday hodisalar aniqlanmadi. Monitoring rejimi faol!")
-else:
-    # Sidebar — Filtrlash tizimi (Multi-Tenant Markazi)
-    tf.sidebar.header("🎯 Multi-Tenant Markazi")
-    chats = ["Barcha Guruhlar"] + list(df['chat_title'].dropna().unique())
-    selected_chat = tf.sidebar.selectbox("Filtrni tanlang:", chats)
-    
-    # Ma'lumotlarni filtrga asosan kesish
-    if selected_chat != "Barcha Guruhlar":
-        df_filtered = df[df['chat_title'] == selected_chat]
+    if df.empty:
+        st.warning("⚠️ Ma'lumotlar bazasida hozircha hech qanday hodisa yo'q yoki ulanish o'rnatilmadi. Tizim kutish rejimida...")
+        return
+
+    # ==========================================
+    # 4. SIDEBAR (Boshqaruv va Filtrlar)
+    # ==========================================
+    with st.sidebar:
+        st.header("⚙️ SOC Boshqaruv Paneli")
+        
+        # Real-time majburiy yangilash tugmasi
+        if st.button("🔄 Zudlik bilan yangilash", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+            
+        st.write("---")
+        st.header("🎯 Multi-Tenant Filtr")
+        all_groups = ["Barcha Guruhlar"] + list(df['chat_title'].dropna().unique())
+        selected_group = st.selectbox("Guruhni tanlang:", all_groups)
+
+    # Filtrni qo'llash
+    if selected_group != "Barcha Guruhlar":
+        filtered_df = df[df['chat_title'] == selected_group]
     else:
-        df_filtered = df
+        filtered_df = df
 
-    # Asosiy Metrikalar (KPI Cards)
-    total_scanned = len(df_filtered)
-    blocked_count = len(df_filtered[df_filtered['status'] == 'BLOCKED'])
-    safe_count = len(df_filtered[df_filtered['status'] == 'SAFE'])
-    
-    # Fishing foizi hisobi
-    phish_rate = (blocked_count / total_scanned * 100) if total_scanned > 0 else 0.0
+    # ==========================================
+    # 5. ASOSIY METRIKALAR
+    # ==========================================
+    total_scanned = len(filtered_df)
+    total_blocked = len(filtered_df[filtered_df['status'] == 'BLOCKED'])
+    total_safe = len(filtered_df[filtered_df['status'] == 'SAFE'])
+    phishing_rate = round((total_blocked / total_scanned) * 100, 1) if total_scanned > 0 else 0.0
 
-    m1, m2, m3, m4 = tf.columns(4)
-    with m1:
-        tf.metric(label="📈 Jami Tekshirilgan Havolalar", value=total_scanned)
-    with m2:
-        tf.metric(label="❌ Bloklangan Fishing Hujumlar", value=blocked_count, delta=f"+{blocked_count} ta tahdid", delta_color="inverse")
-    with m3:
-        tf.metric(label="✅ Xavfsiz Deb Topilganlar", value=safe_count)
-    with m4:
-        tf.metric(label="📊 Fishing Nisbati (Rate)", value=f"{phish_rate:.1f}%")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("🌐 Jami Tekshirildi", total_scanned)
+    col2.metric("🚫 Bloklangan Tahdidlar", total_blocked, delta=f"{total_blocked} ta xavf", delta_color="inverse")
+    col3.metric("✅ Xavfsiz Havolalar", total_safe)
+    col4.metric("📊 Tahdid Indeksi (Rate)", f"{phishing_rate}%")
 
-    tf.markdown("---")
+    st.write("---")
 
-    # Grafika bo'limi (Ikki ustunli vizualizatsiya)
-    g1, g2 = tf.columns([2, 1])
+    # ==========================================
+    # 6. VIZUAL GRAFIKLAR (Xarita va Davlatlar)
+    # ==========================================
+    r1_col1, r1_col2 = st.columns([2, 1])
 
-    with g1:
-        tf.subheader("🗺️ Global Kiber-Hujumlar Real-Time Geolokatsiya Xaritasi")
+    with r1_col1:
+        st.subheader("🗺️ Global Kiber-Hujumlar Xaritasi (Live)")
+        map_data = filtered_df[(filtered_df['status'] == 'BLOCKED') & (filtered_df['latitude'] != 0.0)]
         
-        # Faqat koordinatalari aniq bo'lgan va bloklangan fishinglarni xaritada ko'rsatamiz
-        map_df = df_filtered[(df_filtered['status'] == 'BLOCKED') & (df_filtered['latitude'] != 0.0)]
-        
-        if map_df.empty:
-            tf.warning("⚠️ Hozircha bloklangan fishing serverlarining geolokatsiya ma'lumotlari mavjud emas (yoki barcha havolalar xavfsiz).")
-        else:
+        if not map_data.empty:
             fig_map = px.scatter_mapbox(
-                map_df,
-                lat="latitude",
-                lon="longitude",
-                hover_name="url",
-                hover_data=["ip_address", "country", "username", "chat_title"],
-                color="risk_score",
-                size="risk_score",
-                color_continuous_scale=px.colors.sequential.Colorbrewer,
-                size_max=15,
-                zoom=1,
-                mapbox_style="carto-darkmatter"
+                map_data, lat="latitude", lon="longitude", hover_name="url",
+                hover_data={"latitude": False, "longitude": False, "username": True, "country": True, "ip_address": True, "risk_score": True},
+                color="risk_score", color_continuous_scale="Reds", size="risk_score",
+                zoom=1.2, height=450
             )
-            fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            tf.plotly_chart(fig_map, use_container_width=True)
-
-    with g2:
-        tf.subheader("📊 Hujum Manbalari (Davlatlar)")
-        blocked_df = df_filtered[df_filtered['status'] == 'BLOCKED']
-        if blocked_df.empty:
-            tf.write("Tahdidlar aniqlanmadi.")
+            fig_map.update_layout(
+                mapbox_style="carto-darkmatter", margin={"r":0,"t":0,"l":0,"b":0},
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig_map, use_container_width=True)
         else:
+            st.info("Hozircha geo-lokatsiyaga ega jonli tahdidlar aniqlanmadi.")
+
+    with r1_col2:
+        st.subheader("🎯 Tahdid Manbalari")
+        blocked_df = filtered_df[filtered_df['status'] == 'BLOCKED']
+        if not blocked_df.empty:
             country_counts = blocked_df['country'].value_counts().reset_index()
             country_counts.columns = ['Davlat', 'Soni']
             fig_pie = px.pie(
-                country_counts, 
-                values='Soni', 
-                names='Davlat', 
-                hole=0.4,
-                color_discrete_sequence=px.colors.qualitative.Pastel
+                country_counts, names='Davlat', values='Soni', hole=0.6,
+                color_discrete_sequence=px.colors.sequential.Reds_r
             )
-            fig_pie.update_layout(showlegend=True, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-            tf.plotly_chart(fig_pie, use_container_width=True)
+            fig_pie.update_layout(
+                margin={"r":10,"t":10,"l":10,"b":10},
+                paper_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+            )
+            # Pie ichiga yozuv qo'shish
+            fig_pie.add_annotation(text="IP Geolokatsiya", x=0.5, y=0.5, font_size=14, showarrow=False)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.write("Manbalar mavjud emas.")
 
-    tf.markdown("---")
+    st.write("---")
 
-    # Jonli Loglar va Tafsilotlar Jadvali
-    tf.subheader("📋 SIEM Markazi Oqayotgan Jonli Hodisalar Logi (Incident Logs)")
+    # ==========================================
+    # 7. TRAMPLIN DINAMIKASI (Yangi!)
+    # ==========================================
+    st.subheader("📈 Tahdidlar Dinamikasi (Vaqt bo'yicha)")
+    time_df = filtered_df.copy()
+    time_df['Soat'] = time_df['created_at'].dt.floor('H')
+    time_grouped = time_df.groupby(['Soat', 'status']).size().reset_index(name='Soni')
     
-    # Jadvalni foydalanuvchiga chiroyli ko'rsatish uchun ustunlarni saralash
-    display_df = df_filtered[[
-        'created_at', 'chat_title', 'username', 'url', 'status', 'risk_score', 'ip_address', 'country'
-    ]].copy()
+    if not time_grouped.empty:
+        fig_bar = px.bar(
+            time_grouped, x='Soat', y='Soni', color='status',
+            color_discrete_map={'BLOCKED': '#ff4b4b', 'SAFE': '#00cc96'},
+            barmode='group', height=300
+        )
+        fig_bar.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            margin={"r":10,"t":10,"l":10,"b":10},
+            xaxis_title="Vaqt", yaxis_title="Xabarlar soni"
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ==========================================
+    # 8. INTERAKTIV JADVAL (Smart Format bilan)
+    # ==========================================
+    st.write("---")
+    st.subheader("📋 SIEM Interaktiv Loglar (Deep Dive)")
     
-    display_df.columns = [
-        'Vaqt', 'Guruh Nomi', 'Foydalanuvchi', 'Tekshirilgan URL', 'Holat', 'Xavf Balli', 'IP Manzil', 'Server Davlati'
-    ]
+    display_df = filtered_df[['created_at', 'chat_title', 'username', 'url', 'status', 'risk_score', 'ip_address', 'country']].copy()
     
-    tf.dataframe(display_df, use_container_width=True, hide_index=True)
+    # Advanced Streamlit Column Configuration (Expert Level)
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        height=400,
+        column_config={
+            "created_at": st.column_config.DatetimeColumn("Vaqt (UTC)", format="YYYY-MM-DD HH:mm"),
+            "chat_title": "Guruh",
+            "username": "Foydalanuvchi",
+            "url": st.column_config.LinkColumn("Tekshirilgan Havola", max_chars=45),
+            "status": "Holati",
+            "risk_score": st.column_config.ProgressColumn(
+                "Xavf (% Progress)", 
+                help="Hevristik va AI tahlili bo'yicha xavflilik darajasi", 
+                format="%d", 
+                min_value=0, 
+                max_value=100
+            ),
+            "ip_address": "IP Manzil",
+            "country": "Davlat"
+        }
+    )
+
+    # Footer
+    st.markdown("<p style='text-align: center; color: #555; margin-top: 60px;'>UzPhishGuard SOC v2 Enterprise © 2026 | Barcha huquqlar himoyalangan</p>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
