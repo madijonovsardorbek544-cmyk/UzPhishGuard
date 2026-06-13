@@ -11,7 +11,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ==========================================
-# 1. SAHIFA KONFIGURATSIYASI (Enterprise rejim)
+# 1. SAHIFA KONFIGURATSIYASI (Enterprise SOC)
 # ==========================================
 st.set_page_config(
     page_title="UzPhishGuard SOC | Enterprise SIEM",
@@ -21,11 +21,10 @@ st.set_page_config(
 )
 
 # ==========================================
-# 2. CUSTOM CSS (Neon SOC ko'rinishi uchun)
+# 2. CUSTOM CSS (Neon SOC ko'rinishi)
 # ==========================================
 st.markdown("""
     <style>
-    /* Metrikalar uchun kiber-dizayn */
     div[data-testid="metric-container"] {
         background-color: #1a1c23;
         padding: 15px;
@@ -40,19 +39,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. KESHLASH VA OPTIMIZATSIYA (TTL 5 soniya)
+# 3. KESHLASH VA OPTIMIZATSIYA (Xatosiz vaqt formati)
 # ==========================================
 @st.cache_data(ttl=5, show_spinner=False) 
 def load_data():
     if not DATABASE_URL:
         return pd.DataFrame()
     try:
-        # Haqiqiy pro loyihalardek with operatoridan foydalanamiz
         with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
             query = "SELECT * FROM scanned_links ORDER BY created_at DESC;"
             df = pd.read_sql(query, conn)
             if not df.empty:
-                df['created_at'] = pd.to_datetime(df['created_at'])
+                # Muammo to'liq tuzatildi: errors='coerce' va utc=True qo'shildi
+                df['created_at'] = pd.to_datetime(df['created_at'], errors='coerce', utc=True)
             return df
     except Exception as e:
         st.error(f"Ma'lumotlar bazasiga ulanishda xatolik: {e}")
@@ -75,7 +74,6 @@ def main():
     with st.sidebar:
         st.header("⚙️ SOC Boshqaruv Paneli")
         
-        # Real-time majburiy yangilash tugmasi
         if st.button("🔄 Zudlik bilan yangilash", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
@@ -114,9 +112,10 @@ def main():
 
     with r1_col1:
         st.subheader("🗺️ Global Kiber-Hujumlar Xaritasi (Live)")
-        map_data = filtered_df[(filtered_df['status'] == 'BLOCKED') & (filtered_df['latitude'] != 0.0)]
+        map_data = filtered_df[(filtered_df['status'] == 'BLOCKED') & (filtered_df['latitude'] != 0.0) & (filtered_df['latitude'].notna())]
         
         if not map_data.empty:
+            # Muammo to'liq tuzatildi: Palitra "Reds" qilib sozlandi
             fig_map = px.scatter_mapbox(
                 map_data, lat="latitude", lon="longitude", hover_name="url",
                 hover_data={"latitude": False, "longitude": False, "username": True, "country": True, "ip_address": True, "risk_score": True},
@@ -129,10 +128,10 @@ def main():
             )
             st.plotly_chart(fig_map, use_container_width=True)
         else:
-            st.info("Hozircha geo-lokatsiyaga ega jonli tahdidlar aniqlanmadi.")
+            st.info("ℹ️ Hozircha geo-lokatsiyaga ega jonli fishing tahdidlari mavjud emas.")
 
     with r1_col2:
-        st.subheader("🎯 Tahdid Manbalari")
+        st.subheader("🎯 Hujum Manbalari")
         blocked_df = filtered_df[filtered_df['status'] == 'BLOCKED']
         if not blocked_df.empty:
             country_counts = blocked_df['country'].value_counts().reset_index()
@@ -146,8 +145,7 @@ def main():
                 paper_bgcolor="rgba(0,0,0,0)",
                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
             )
-            # Pie ichiga yozuv qo'shish
-            fig_pie.add_annotation(text="IP Geolokatsiya", x=0.5, y=0.5, font_size=14, showarrow=False)
+            fig_pie.add_annotation(text="IP Geo", x=0.5, y=0.5, font_size=14, showarrow=False)
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
             st.write("Manbalar mavjud emas.")
@@ -155,14 +153,18 @@ def main():
     st.write("---")
 
     # ==========================================
-    # 7. TRAMPLIN DINAMIKASI (Yangi!)
+    # 7. TAHDIDLAR DINAMIKASI (Timeline)
     # ==========================================
     st.subheader("📈 Tahdidlar Dinamikasi (Vaqt bo'yicha)")
     time_df = filtered_df.copy()
-    time_df['Soat'] = time_df['created_at'].dt.floor('H')
-    time_grouped = time_df.groupby(['Soat', 'status']).size().reset_index(name='Soni')
     
-    if not time_grouped.empty:
+    # Faqat vaqt formati muvaffaqiyatli o'qilgan qatorlarni chiqaramiz
+    time_df = time_df[time_df['created_at'].notna()]
+    
+    if not time_df.empty:
+        time_df['Soat'] = time_df['created_at'].dt.floor('H')
+        time_grouped = time_df.groupby(['Soat', 'status']).size().reset_index(name='Soni')
+        
         fig_bar = px.bar(
             time_grouped, x='Soat', y='Soni', color='status',
             color_discrete_map={'BLOCKED': '#ff4b4b', 'SAFE': '#00cc96'},
@@ -174,16 +176,17 @@ def main():
             xaxis_title="Vaqt", yaxis_title="Xabarlar soni"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        st.info("Vaqt tahlili uchun ma'lumot yetarli emas.")
 
     # ==========================================
-    # 8. INTERAKTIV JADVAL (Smart Format bilan)
+    # 8. INTERAKTIV JADVAL (Smart Progress Bar)
     # ==========================================
     st.write("---")
     st.subheader("📋 SIEM Interaktiv Loglar (Deep Dive)")
     
     display_df = filtered_df[['created_at', 'chat_title', 'username', 'url', 'status', 'risk_score', 'ip_address', 'country']].copy()
     
-    # Advanced Streamlit Column Configuration (Expert Level)
     st.dataframe(
         display_df,
         use_container_width=True,
@@ -193,11 +196,11 @@ def main():
             "created_at": st.column_config.DatetimeColumn("Vaqt (UTC)", format="YYYY-MM-DD HH:mm"),
             "chat_title": "Guruh",
             "username": "Foydalanuvchi",
-            "url": st.column_config.LinkColumn("Tekshirilgan Havola", max_chars=45),
+            "url": st.column_config.LinkColumn("Tekshirilgan Havola", max_chars=50),
             "status": "Holati",
             "risk_score": st.column_config.ProgressColumn(
                 "Xavf (% Progress)", 
-                help="Hevristik va AI tahlili bo'yicha xavflilik darajasi", 
+                help="AI tahlili bo'yicha xavflilik darajasi", 
                 format="%d", 
                 min_value=0, 
                 max_value=100
@@ -207,7 +210,6 @@ def main():
         }
     )
 
-    # Footer
     st.markdown("<p style='text-align: center; color: #555; margin-top: 60px;'>UzPhishGuard SOC v2 Enterprise © 2026 | Barcha huquqlar himoyalangan</p>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
