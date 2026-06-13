@@ -1,194 +1,152 @@
-import os
-import pandas as pd
 import streamlit as st
-import plotly.express as px
-import pydeck as pdk  # 3D Xarita uchun WebGL kutubxonasi
+import pandas as pd
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
+import plotly.express as px
+import plotly.graph_objects as go
 
-# .env yuklash
-load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Sahifa sozlamalari (Full-width mode)
+st.set_page_config(page_title="UzPhishGuard 3D SOC", layout="wide", initial_sidebar_state="collapsed")
 
-# ==========================================
-# 1. ENTERPRISE SAHIFA SOZLAMALARI
-# ==========================================
-st.set_page_config(
-    page_title="UzPhishGuard 3D SOC",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# STRATEGIK MA'LUMOTLAR
+DATABASE_URL = "postgresql://postgres.quvyyouwtytywtotkdyw:Harvard2030$^^@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
 
-# ==========================================
-# 2. NEON CYBER-PUNK SOC CSS
-# ==========================================
-st.markdown("""
-    <style>
-    .stApp { background-color: #0d1117; }
-    div[data-testid="metric-container"] {
-        background-color: #161b22;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #30363d;
-        border-left: 6px solid #00f2fe;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-    }
-    div[data-testid="metric-container"]:nth-child(2) { border-left-color: #ff4b4b; }
-    div[data-testid="metric-container"]:nth-child(3) { border-left-color: #00cc96; }
-    div[data-testid="metric-container"]:nth-child(4) { border-left-color: #fecb52; }
-    h1, h2, h3, h4 { color: #ffffff !important; font-family: 'Courier New', Courier, monospace; }
-    </style>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 3. KESHLASH VA OPTIMIZATSIYA
-# ==========================================
-@st.cache_data(ttl=3, show_spinner=False) 
-def load_data():
-    if not DATABASE_URL:
-        return pd.DataFrame()
+def load_data_from_supabase():
     try:
-        with psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor) as conn:
-            query = "SELECT * FROM scanned_links ORDER BY id DESC;"
-            df = pd.read_sql(query, conn)
+        # Baza bilan ulanish
+        conn = psycopg2.connect(DATABASE_URL)
+        
+        # Avval jadvaldagi haqiqiy ustunlarni aniqlab olamiz
+        columns_query = "SELECT column_name FROM information_schema.columns WHERE table_name = 'scanned_links';"
+        df_cols = pd.read_sql(columns_query, conn)
+        existing_cols = set(df_cols['column_name'].tolist())
+        
+        # Agar jadval mutlaqo bo'sh bo'lsa yoki topilmasa
+        if not existing_cols:
+            conn.close()
+            return pd.DataFrame()
             
-            if not df.empty:
-                df.columns = [col.lower() for col in df.columns]
-                
-                # Soxta test satrlarini (chat_title, username yozuvlarini) bazadan o'chirish
-                if 'chat_title' in df.columns:
-                    df = df[~df['chat_title'].astype(str).str.contains('chat_title|username|url', case=False, na=False)]
-                
-                if 'created_at' in df.columns:
-                    df['created_at'] = pd.to_datetime(df['created_at'], errors='coerce', utc=True)
-                if 'risk_score' in df.columns:
-                    df['risk_score'] = pd.to_numeric(df['risk_score'], errors='coerce').fillna(0).astype(int)
-            return df
+        # Dinamik ravishda bor ustunlarnigina tanlab olamiz
+        query_cols = []
+        mapping = {
+            'chat_title': 'chat_title', 'group_id': 'chat_title',
+            'username': 'username', 'user': 'username',
+            'url': 'url', 'status': 'status', 'risk_score': 'risk_score',
+            'ip_address': 'ip_address', 'country': 'country',
+            'latitude': 'latitude', 'longitude': 'longitude',
+            'created_at': 'created_at'
+        }
+        
+        for db_col, target_name in mapping.items():
+            if db_col in existing_cols:
+                query_cols.append(f"{db_col} AS {target_name}")
+                # Bir marta mapping qilingach, muqobil variantni tekshirmaslik uchun
+                if target_name in ['chat_title', 'username'] and db_col != target_name:
+                    continue
+                    
+        # Dublikatlarni tozalab, SQL so'rovini quramiz
+        unique_query_cols = list(set(query_cols))
+        
+        if 'created_at AS created_at' not in unique_query_cols and 'created_at' in existing_cols:
+            unique_query_cols.append('created_at')
+
+        select_clause = ", ".join(unique_query_cols)
+        query = f"SELECT {select_clause} FROM scanned_links ORDER BY id DESC LIMIT 500;"
+        
+        df = pd.read_sql(query, conn)
+        conn.close()
+        
+        # Vaqt formatini xavfsiz o'girish
+        if 'created_at' in df.columns:
+            df['created_at'] = pd.to_datetime(df['created_at'], errors='coerce')
+        else:
+            df['created_at'] = pd.Timestamp.now()
+            
+        return df
     except Exception as e:
-        st.error(f"Baza xatoligi: {e}")
+        st.error(f"Bazadan ma'lumot olishda xatolik: {e}")
         return pd.DataFrame()
 
-def main():
-    # Kiber Sarlavha
-    st.markdown("<h1 style='text-align: center; color: #00F2FE; text-shadow: 0 0 20px rgba(0,242,254,0.6); font-family: monospace;'>🛡️ UZPHISHGUARD SOC v3 — 3D CYBER SIEM</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #8b949e; font-size: 14px;'>Real-time WebGL 3D Kiber-tahdidlar Interaktiv Monitoring Markazi</p>", unsafe_allow_html=True)
-    st.write("")
+# Ma'lumotlarni yuklash
+df = load_data_from_supabase()
 
-    df = load_data()
+# Dizayn sarlavhasi
+st.markdown("<h1 style='text-align: center; color: #00F3FF; font-family: monospace;'>🛡️ UZPHISHGUARD SOC v3 — 3D CYBER SIEM</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #888; font-style: italic;'>Real-time WebGL 3D Kiber-tahdidlar Interaktiv Monitoring Markazi</p>", unsafe_allow_html=True)
 
-    if df.empty:
-        st.warning("⚠️ Ma'lumotlar bazasi hozircha bo'sh yoki faqat test satrlari mavjud edi (ular tozalandi). Telegrambotga yangi havola tashlang!")
-        return
-
-    # ==========================================
-    # 4. SIDEBAR
-    # ==========================================
-    with st.sidebar:
-        st.markdown("<h3 style='color: #00F2FE;'>⚙️ 3D SOC Controller</h3>", unsafe_allow_html=True)
-        if st.button("🔄 Zudlik bilan yangilash", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-        
-        st.write("---")
-        if 'chat_title' in df.columns:
-            all_groups = ["Barcha Guruhlar"] + list(df['chat_title'].dropna().unique())
-            selected_group = st.selectbox("🎯 Guruh Filtri:", all_groups)
-            if selected_group != "Barcha Guruhlar":
-                df = df[df['chat_title'] == selected_group]
-
-    status_col = 'status' if 'status' in df.columns else df.columns[4]
-    df[status_col] = df[status_col].astype(str).str.upper()
-
-    # ==========================================
-    # 5. LIVE METRIKALAR PANEL
-    # ==========================================
-    total_scanned = len(df)
-    total_blocked = len(df[df[status_col] == 'BLOCKED'])
-    total_safe = len(df[df[status_col] == 'SAFE'])
-    phishing_rate = round((total_blocked / total_scanned) * 100, 1) if total_scanned > 0 else 0.0
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("🌐 Jami Trafik (Links)", total_scanned)
-    m2.metric("🚫 Bloklangan Hujumlar", total_blocked, delta=f"{total_blocked} Tahdid" if total_blocked > 0 else None, delta_color="inverse")
-    m3.metric("✅ Toza Havolalar", total_safe)
-    m4.metric("📊 Fishing Nisbati (Rate)", f"{phishing_rate}%")
-
-    st.write("---")
-
-    # ==========================================
-    # 6. 3D INTERAKTIV GEOLOKATSIYA XARITASI (PyDeck)
-    # ==========================================
-    st.markdown("### 🗺️ Jonli 3D Kiber-Hujumlar Globus Simulyatsiyasi (WebGL)")
+# Agar ma'lumotlar bo'lsa dashboardni chizamiz
+if not df.empty and len(df) > 0:
     
-    if 'latitude' in df.columns and 'longitude' in df.columns:
-        # Faqat koordinatali va bloklangan xavflarni olamiz
-        map_data = df[(df[status_col] == 'BLOCKED') & (df['latitude'].notna()) & (df['latitude'] != 0.0)].copy()
-        
-        # Ustun balandligi uchun xavf darajasini ko'paytiramiz (3D vizual effekt uchun)
-        if not map_data.empty:
-            map_data['elevation'] = map_data['risk_score'] * 500
-            
-            # PyDeck 3D Qatlami (Har bir hujum - kiber-ustun ko'rinishida)
-            layer = pdk.Layer(
-                "ColumnLayer",
-                data=map_data,
-                get_position="[longitude, latitude]",
-                get_elevation="elevation",
-                elevation_scale=10,
-                radius=40000,
-                get_fill_color="[255, 75, 75, 200]", # Neon Qizil ustunlar
-                pickable=True,
-                auto_highlight=True,
-            )
-            
-            # Xarita ko'rinish kamerasi (Kiber-dizayn burchagi)
-            view_state = pdk.ViewState(
-                latitude=map_data['latitude'].mean(),
-                longitude=map_data['longitude'].mean(),
-                zoom=1.5,
-                pitch=45, # 3D qiyalik burchagi
-                bearing=30
-            )
-            
-            # 3D render qilish
-            r = pdk.Deck(
-                layers=[layer],
-                initial_view_state=view_state,
-                map_style="mapbox://styles/mapbox/dark-v10", # To'q qora xarita
-                tooltip={"text": "Tahdid: {url}\nXavf: {risk_score}%\nIP: {ip_address}\nDavlat: {country}"}
-            )
-            st.pydeck_chart(r)
-        else:
-            st.info("ℹ️ 3D Xaritada ko'rsatish uchun koordinatali JONLI bloklangan tahdidlar hozircha yo'q. Botga fishing link tashlashingiz bilan bu yerda 3D ustunlar paydo bo'ladi!")
-    else:
-        st.info("ℹ️ Geolokatsiya ma'lumotlari mavjud emas.")
-
-    # ==========================================
-    # 7. INTERAKTIV JADVAL (Toza Real Loglar)
-    # ==========================================
+    # 1. METRIKALAR (KPIs)
+    total_scanned = len(df)
+    blocked_links = len(df[df['status'] == 'BLOCKED'])
+    safe_links = len(df[df['status'] == 'SAFE'])
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("📊 UMUMIY TRAFIK", total_scanned)
+    m2.metric("❌ BLOKLANGAN FISHING", blocked_links, delta=f"+{blocked_links} tahdid", delta_color="inverse")
+    m3.metric("✅ XAVFSIZ HAVOLALAR", safe_links)
+    
     st.write("---")
-    st.markdown("### 📋 SIEM Interaktiv Loglar (Deep Dive)")
+    
+    # 2. 3D KIBER XARITA (INTERACTIVE NEON GLOBE)
+    st.subheader("🌐 Global Incident Map (3D Kiber-Xarita)")
+    
+    # Koordinata ustunlari borligini tekshirish
+    if 'latitude' in df.columns and 'longitude' in df.columns:
+        # Bo'sh koordinatalarni tozalash
+        map_df = df.dropna(subset=['latitude', 'longitude'])
+        
+        fig_map = px.scatter_mapbox(
+            map_df,
+            lat="latitude",
+            lon="longitude",
+            hover_name="url",
+            hover_data=["username", "country", "ip_address", "status"],
+            color="status",
+            color_discrete_map={"BLOCKED": "#FF0055", "SAFE": "#00FF66"},
+            size="risk_score",
+            zoom=1.5,
+            height=500
+        )
+        fig_map.update_layout(
+            mapbox_style="carto-darkmatter",
+            margin={"r":0,"t":0,"l":0,"b":0},
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+    else:
+        st.info("Geolokatsiya ma'lumotlari shakllanmoqda...")
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        height=380,
-        column_config={
-            "created_at": st.column_config.DatetimeColumn("Vaqt (UTC)", format="YYYY-MM-DD HH:mm"),
-            "url": st.column_config.LinkColumn("Tekshirilgan Havola", max_chars=60),
-            "risk_score": st.column_config.ProgressColumn("Xavf Darajasi", format="%d%%", min_value=0, max_value=100),
-            "status": "Holati",
-            "chat_title": "Guruh nomi",
-            "username": "User",
-            "ip_address": "IP Manzil",
-            "country": "Davlat"
-        }
-    )
+    # 3. GRAFIKLAR PANEL
+    st.write("---")
+    g1, g2 = st.columns(2)
+    
+    with g1:
+        st.subheader("📈 Vaqt bo'yicha hujumlar dinamikasi")
+        df_counts = df.set_index('created_at').resample('H').count().reset_index() if 'created_at' in df.columns else df
+        fig_line = px.line(df_counts, x='created_at', y='url', title="Hujumlar intensivligi", template="plotly_dark")
+        fig_line.update_traces(line_color='#00F3FF')
+        st.plotly_chart(fig_line, use_container_width=True)
+        
+    with g2:
+        st.subheader("🎯 Eng ko'p nishonga olingan guruhlar")
+        if 'chat_title' in df.columns:
+            group_counts = df['chat_title'].value_counts().reset_index()
+            group_counts.columns = ['Guruh', 'Soni']
+            fig_bar = px.bar(group_counts, x='Guruh', y='Soni', color='Soni', color_continuous_scale='Reds', template="plotly_dark")
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("Guruhlar tahlili yuklanmoqda...")
 
-    st.markdown("<p style='text-align: center; color: #30363d; margin-top: 50px; font-family: monospace;'>UzPhishGuard SOC Tizimi v3.0 | 3D Enterprise Edition © 2026</p>", unsafe_allow_html=True)
+    # 4. REAL-TIME LOG TABLE
+    st.write("---")
+    st.subheader("📜 Canli SOC Log Terminali")
+    st.dataframe(df, use_container_width=True)
 
-if __name__ == "__main__":
-    main()
+else:
+    st.warning("⚠️ Ma'lumotlar bazasi hozircha bo'sh yoki format mos kelmadi. Telegram guruhga fishing havola tashlang va sahifani yangilang!")
+
+# Avtomatik yangilash tugmasi
+if st.button("🔄 Zudlik bilan yangilash"):
+    st.rerun()
