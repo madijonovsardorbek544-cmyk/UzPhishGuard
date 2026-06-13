@@ -150,13 +150,16 @@ def main():
         else:
             st.caption("Bloklangan davlatlar tahlili mavjud emas.")
 
-    # ==========================================
-    # 7. INTERAKTIV JADVAL (Dinamik Ustunlar!)
+# ==========================================
+    # 7. INTERAKTIV JADVAL (Filtrlangan Toza Loglar)
     # ==========================================
     st.write("---")
     st.markdown("### 📋 SIEM Interaktiv Loglar (Deep Dive)")
 
-    # Haqiqiy ma'lumot chiqishi uchun ustunlarni to'g'ridan-to'g'ri o'qiymiz
+    # Soxta test satrlarini jadvaldan qirqib tashlash (Faqat real ma'lumotlar qoladi)
+    if not df.empty and 'chat_title' in df.columns:
+        df = df[~df['chat_title'].astype(str).str.contains('chat_title|username|url', case=False, na=False)]
+
     st.dataframe(
         df,
         use_container_width=True,
