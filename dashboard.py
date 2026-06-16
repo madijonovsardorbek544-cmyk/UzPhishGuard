@@ -6,9 +6,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 
+# .env fayldan yoki server muhitidan (Render) o'zgaruvchilarni yuklash
 load_dotenv()
 
-# 1. Sahifa Konfiguratsiyasi
+# 1. Sahifa Konfiguratsiyasi (Faqat bir marta va eng tepada bo'lishi shart)
 st.set_page_config(
     page_title="UzPhishGuard SOC Dashboard v5.0",
     page_icon="🛡️",
@@ -16,13 +17,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. Maxsus To'g'ri CSS Interfeys (Xatosiz variant)
+# 2. To'g'ri va Xavfsiz Kiber-Dizayn Stillari (Xatoliksiz variant)
 st.markdown("""
     <style>
+    /* Asosiy fon va matn ranglari */
     .main { background-color: #060913; color: #e2e8f0; }
     [data-testid="stSidebar"] { background-color: #0b1120; border-right: 2px solid #1e293b; }
     
-    /* Neon kiber-kartalar */
+    /* Neon kiber-kartalar uchun klasslar */
     .metric-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
         border: 1px solid #3730a3;
@@ -32,15 +34,33 @@ st.markdown("""
         text-align: center;
         margin-bottom: 15px;
     }
-    .metric-lbl { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #94a3b8; margin-bottom: 5px; }
-    .metric-val { font-size: 32px; font-weight: 800; color: #38bdf8; font-family: 'Courier New', monospace; }
-    .metric-val-crit { font-size: 32px; font-weight: 800; color: #f43f5e; font-family: 'Courier New', monospace; text-shadow: 0 0 10px rgba(244, 63, 94, 0.5); }
+    .metric-lbl { 
+        font-size: 13px; 
+        text-transform: uppercase; 
+        letter-spacing: 2px; 
+        color: #94a3b8; 
+        margin-bottom: 5px; 
+    }
+    .metric-val { 
+        font-size: 32px; 
+        font-weight: 800; 
+        color: #38bdf8; 
+        font-family: 'Courier New', monospace; 
+    }
+    .metric-val-crit { 
+        font-size: 32px; 
+        font-weight: 800; 
+        color: #f43f5e; 
+        font-family: 'Courier New', monospace; 
+        text-shadow: 0 0 10px rgba(244, 63, 94, 0.5); 
+    }
     </style>
-""", unsafe_allowed_html=True)
+""", unsafe_allow_html=True)
 
+# Supabase ulanish havolasi
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# 3. Ma'lumotlarni yuklash funksiyasi
+# 3. Ma'lumotlarni Supabase'dan tortish funksiyasi
 def fetch_threats_from_supabase():
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -56,21 +76,24 @@ def fetch_threats_from_supabase():
         st.error(f"❌ Supabase SQL ulanishida uzilish: {e}")
         return pd.DataFrame()
 
+# Ma'lumotlar bazasidan jurnallarni o'qish
 df_raw = fetch_threats_from_supabase()
 
-# --- SIDEBAR CONTROL PANEL ---
+# --- SIDEBAR CONTROL PANEL (Yon Panel) ---
 st.sidebar.markdown("## ⚙️ SOC boshqaruv paneli")
 st.sidebar.markdown("---")
 st.sidebar.info("🤖 **Tizim:** UzPhishGuard Core v4.5\n\n🎯 **Status:** Real-time monitoring faol.")
 
+# Baza bo'sh bo'lgan holatni tekshirish
 if df_raw.empty:
     st.title("🛡️ UzPhishGuard SIEM Command Center")
-    st.warning("⚠️ Supabase bazasida hozircha kiber-hujumlar jurnali bo'sh. Bot birinchi fishing xabarini ushlashi bilan bu yerda interaktiv 3D grafiklar paydo bo'ladi!")
+    st.markdown("---")
+    st.warning("⚠️ Supabase bazasida hozircha kiber-hujumlar jurnali topilmadi. Bot birinchi fishing xabarini ushlashi bilan bu yerda interaktiv 3D grafiklar paydo bo'ladi!")
 else:
     df = df_raw.copy()
     df['detected_at'] = pd.to_datetime(df['detected_at'])
     
-    # Yon paneldagi filtrlar
+    # Yon paneldagi tahdid turi bo'yicha filtr
     threat_filter = st.sidebar.multiselect(
         "🔮 Tahdid turlarini filtrlash:",
         options=df['threat_type'].unique(),
@@ -78,12 +101,12 @@ else:
     )
     df = df[df['threat_type'].isin(threat_filter)]
 
-    # --- MAIN DASHBOARD INTERFACE ---
+    # --- MAIN DASHBOARD INTERFACE (Asosiy Oyna) ---
     st.markdown("# 🛡️ UzPhishGuard — MIT-Tier Cyber Security SIEM Center")
     st.markdown("### 🏢 Markaziy kiber-tahdidlarni tahlil qilish va intellektual monitoring stansiyasi")
     st.markdown("---")
 
-    # 4. KIBER METRIKALAR (HTML orqali xavfsiz chiqarish)
+    # 4. KIBER METRIKALAR PANELINI GENERATSIYA QILISH
     total_incidents = len(df)
     critical_incidents = len(df[df['risk_score'] >= 80])
     avg_danger_rate = int(df['risk_score'].mean()) if total_incidents > 0 else 0
@@ -95,29 +118,30 @@ else:
                 <div class="metric-lbl">🚨 JAMI ANIQLANGAN TAHDIDLAR</div>
                 <div class="metric-val">{total_incidents} ta</div>
             </div>
-        """, unsafe_allowed_html=True)
+        """, unsafe_allow_html=True)
     with m_col2:
         st.markdown(f"""
             <div class="metric-box">
                 <div class="metric-lbl">🔴 CRITICAL ATTACKS (💥 RISK >= 80%)</div>
                 <div class="metric-val-crit">{critical_incidents} ta</div>
             </div>
-        """, unsafe_allowed_html=True)
+        """, unsafe_allow_html=True)
     with m_col3:
         st.markdown(f"""
             <div class="metric-box">
                 <div class="metric-lbl">📊 O'RTACHA XAVF KO'RSATKICHI</div>
                 <div class="metric-val" style="color: #a855f7;">{avg_danger_rate}%</div>
             </div>
-        """, unsafe_allowed_html=True)
+        """, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # 5. ADVANCED 3D VIZUALIZATSIYA VA GRAFIKLAR
+    # 5. INTERAKTIV 3D VA DYNAMIC GRAFIKLAR
     g_col1, g_col2 = st.columns([1.2, 0.8])
 
     with g_col1:
         st.subheader("🌐 3D Hujumlar Matritsasi (Scatter 3D)")
+        # Vaqtni soniyalarga o'tkazish (Z o'qi uchun)
         df['Time_Seconds'] = df['detected_at'].dt.hour * 3600 + df['detected_at'].dt.minute * 60 + df['detected_at'].dt.second
         
         fig_3d = px.scatter_3d(
@@ -165,8 +189,8 @@ else:
 
     st.markdown("---")
 
-    # 6. JONLI LOG JADVALI
-    st.subheader("📋 Jonli Tahdidlar Voqeligining Jurnali (Incident Feed)")
+    # 6. JONLI LOG JADVALI (Incident Feed)
+    st.subheader("📋 Jonli Tahdidlar Voqeligining Jurnali")
     search_bar = st.text_input("🔍 Guruh nomi yoki foydalanuvchi username bo'yicha tezkor qidiruv:")
     
     if search_bar:
