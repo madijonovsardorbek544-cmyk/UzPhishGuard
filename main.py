@@ -223,8 +223,10 @@ async def monitor_apk_files(message: types.Message):
                     payload_raw=sha256_hash
                 )
                 
+                # Zararli yoki shubhali APK faylni guruhdan o'chiramiz
                 await message.delete()
                 
+                # Ogohlantirish xabari endi o'chib ketmaydi!
                 warning_msg = (
                     f"🛡️ **UzPhishGuard Deep Scan Engine**\n\n"
                     f"{status_icon}\n"
@@ -235,8 +237,12 @@ async def monitor_apk_files(message: types.Message):
                     f"🔒 *Foydalanuvchilar xavfsizligi uchun zararli ob'ekt yo'q qilindi!*"
                 )
                 sent_msg = await message.answer(warning_msg)
-                await asyncio.sleep(15)
-                await sent_msg.delete()
+                
+                # Guruh a'zolari ko'rishi uchun ogohlantirishni guruh tepasiga pin qilamiz
+                try:
+                    await bot.pin_chat_message(chat_id=message.chat.id, message_id=sent_msg.message_id, disable_notification=False)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 logger.error(f"APK tahlilida xatolik: {e}")
@@ -247,7 +253,7 @@ async def monitor_text_messages(message: types.Message):
         if message.from_user.username == "GroupAnonymousBot":
             return
 
-        # Yangi sun'iy intellektli NLP matn tahlili
+        # Sun'iy intellektli NLP matn tahlili
         is_phishing, risk_score, reason = analyze_text_nlp(message.text)
 
         if is_phishing:
@@ -265,22 +271,30 @@ async def monitor_text_messages(message: types.Message):
             )
             
             try:
+                # Kiber-firgarlik xabarini darhol o'chiramiz
                 await message.delete()
+                
+                # Ogohlantirish xabari guruhda doimiy qoladi!
                 warning = await message.answer(
                     f"🛡️ **UzPhishGuard AI NLP Engine**\n\n"
                     f"⚠️ Foydalanuvchi {username} yuborgan kiber-firgarlik matni o'chirildi!\n"
                     f"🔍 **AI Diagnoz:** {reason}\n"
                     f"🚫 *Guruhda ijtimoiy muhandislik va psixologik bosimlar taqiqlangan!*"
                 )
-                await asyncio.sleep(15)
-                await warning.delete()
+                
+                # Ogohlantirish xabarini guruhga pin qilib qo'yish
+                try:
+                    await bot.pin_chat_message(chat_id=message.chat.id, message_id=warning.message_id, disable_notification=False)
+                except Exception:
+                    pass
+                    
             except Exception as e:
                 logger.error(f"Xabarni o'chirishda xatolik: {e}")
 
 async def main():
     logger.info("⚡ Supabase arxitekturasi tekshirilmoqda...")
     init_db()
-    logger.info("🛡️ UzPhishGuard Enterprise Core v4.0 (AI NLP Mode) faollashtirildi.")
+    logger.info("🛡️ UzPhishGuard Enterprise Core v4.0 (Pin Message Mode) faollashtirildi.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
