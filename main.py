@@ -132,7 +132,7 @@ def analyze_apk_permissions(file_bytes: bytes) -> tuple[bool, int, str]:
         logger.error(f"Androguard dekompilyatsiyada xato: {e}")
         return False, 0, "Fayl strukturasini o'qib bo'lmadi."
 
-# 6. UzBERT NLP & Advanced Phishing Detection Engine (AI Core 🧠)
+# 6. UzBERT NLP & Advanced Phishing Detection Engine (AI Core 🧠) - UPDATED
 def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
     """
     O'zbekcha ijtimoiy muhandislik va fishing kontekstini chuqur tahlil qiluvchi NLP AI moduli.
@@ -142,10 +142,11 @@ def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
         
     text_clean = text.lower().strip()
     
-    # 1-Sinf: Pul yutuqlari va soxta aksiyalar (Financial Phishing)
-    financial_pattern = r"(pul|yutuq|sovg'a|sovga|mukofot|aksiya|fondi|bonus|aksiyada|yutib oldingiz|tarqatilmoqda|click|payme|uzcard|humo)"
-    # 2-Sinf: Kiber-tahdid va qo'rqitish (Urgency/Scareware)
-    urgency_pattern = r"(bloklandi|sharmanda|videongiz|kodni bering|tasdiqlang|parol|karta raqam|shaxsiy ma'lumot|zudlik bilan|shoshiling)"
+    # 1-Sinf: Pul yutuqlari va soxta aksiyalar (Financial Phishing) - Kengaytirilgan variant
+    financial_pattern = r"(pul|yutuq|sovg'a|sovga|mukofot|aksiya|fondi|bonus|aksiyada|yutib oldingiz|tarqatilmoqda|click|payme|uzcard|humo|karta|kartangiz|hisobingiz|balans)"
+    
+    # 2-Sinf: Kiber-tahdid va qo'rqitish (Urgency/Scareware) - Kengaytirilgan variant
+    urgency_pattern = r"(bloklandi|sharmanda|videongiz|kodni bering|tasdiqlang|parol|karta raqam|shaxsiy ma'lumot|zudlik bilan|shoshiling|ogohlantirish|kiriting)"
     
     # Hevristik NLP ball tizimi
     score = 0
@@ -157,7 +158,7 @@ def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
     
     if re.search(financial_pattern, text_clean):
         score += 45
-        reasons.append("Moliyaviy firgarlik/yutuq va'dasi")
+        reasons.append("Moliyaviy firgarlik/karta xavfsizligi tahdidi")
         
     if re.search(urgency_pattern, text_clean):
         score += 50
