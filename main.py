@@ -5,7 +5,7 @@ import asyncio
 import hashlib
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.enums import ChatType
 import psycopg2
 from dotenv import load_dotenv
@@ -34,13 +34,12 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# 3. Ma'lumotlar bazasini tekshirish va XATOLIKNI TO'G'RILASH
+# 3. Ma'lumotlar bazasini tekshirish va unifikatsiya qilish
 def init_db():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
         
-        # Jadvalni yaratish
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS threats (
                 id SERIAL PRIMARY KEY,
@@ -54,11 +53,10 @@ def init_db():
             );
         """)
         
-        # Render'dagi xatoni to'g'rilash: payload_raw ustuni yo'q bo'lsa, qo'shib qo'yamiz
         try:
             cursor.execute("ALTER TABLE threats ADD COLUMN IF NOT EXISTS payload_raw TEXT;")
-        except Exception as e:
-            conn.rollback() # Xato bo'lsa tranzaksiyani bekor qilish
+        except Exception:
+            conn.rollback()
             
         conn.commit()
         cursor.close()
@@ -140,15 +138,15 @@ def analyze_apk_permissions(file_bytes: bytes) -> tuple[bool, int, str]:
         logger.error(f"Androguard dekompilyatsiyada xato: {e}")
         return False, 0, "Fayl strukturasini o'qib bo'lmadi."
 
-# 6. UzBERT NLP & Advanced Phishing Detection Engine (AI Core 🧠)
+# 6. UzBERT NLP Engine — Dinamik Ball Tizimi Yangilandi
 def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
     if not text:
         return False, 0, ""
         
     text_clean = text.lower().strip()
     
-    financial_pattern = r"(pul|yutuq|sovg'a|sovga|mukofot|aksiya|fondi|bonus|aksiyada|yutib oldingiz|tarqatilmoqda|click|payme|uzcard|humo|karta|kartangiz|hisobingiz|balans)"
-    urgency_pattern = r"(bloklandi|sharmanda|videongiz|kodni bering|tasdiqlang|parol|karta raqam|shaxsiy ma'lumot|zudlik bilan|shoshiling|ogohlantirish|kiriting)"
+    financial_pattern = r"(pul|yutuq|sovg'a|sovga|mukofot|aksiya|bonus|click|payme|uzcard|humo|karta|kartangiz|hisobingiz|balans)"
+    urgency_pattern = r"(bloklandi|sharmanda|videongiz|kodni|tasdiqlang|parol|karta raqam|shaxsiy ma'lumot|zudlik bilan|shoshiling|ogohlantirish|kiriting)"
     
     score = 0
     reasons = []
@@ -158,22 +156,23 @@ def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
     
     if re.search(financial_pattern, text_clean):
         score += 45
-        reasons.append("Moliyaviy firgarlik/karta xavfsizligi tahdidi")
+        reasons.append("Moliyaviy firibgarlik elementi")
         
     if re.search(urgency_pattern, text_clean):
-        score += 50
-        reasons.append("Ijtimoiy muhandislik bosimi (Urgency/Scareware)")
+        score += 45
+        reasons.append("Ijtimoiy muhandislik bosimi (Urgency)")
         
     if has_link:
-        score += 15
+        score += 20
+        reasons.append("Tashqi havola mavjudligi")
+        # Oq ro'yxat (Whitelist)
         whitelist = ["kun.uz", "daryo.uz", "gazeta.uz", "lex.uz", "gov.uz", "telegram.org"]
         if any(good_site in urls[0] for good_site in whitelist):
-            return False, 0, ""
+            return False, 0, "" # Ishonchli sayt bo'lsa, xavfsiz deb hisoblaydi
             
-    if score >= 60:
-        final_score = min(score, 100)
-        details = f"AI NLP Core: {', '.join(reasons)} aniqlandi."
-        return True, final_score, details
+    # Agar xavf darajasi 50% dan oshsa — ogohlantiramiz
+    if score >= 50:
+        return True, min(score, 100), f"AI NLP Core: {', '.join(reasons)} aniqlandi."
         
     return False, 0, ""
 
@@ -183,13 +182,13 @@ def analyze_text_nlp(text: str) -> tuple[bool, int, str]:
 async def cmd_start_private(message: types.Message):
     if message.chat.type == ChatType.PRIVATE:
         await message.answer(
-            "🛡️ **UzPhishGuard Enterprise v4.0 (AI NLP Core) faol!**\n\n"
-            "Meni guruhlaringizga qo'shib adminlik huquqini bering. Endi tizim nafaqat virusli fayllarni, "
-            "balki guruhdagi gap-so'zlar va matnlarni ham **UzBERT AI NLP** mantiqi orqali fishing yoki ijtimoiy muhandislikka tekshiradi!\n\n"
-            "💬 *Shuningdek, shubhali xabar yoki havolalarni menga shu yerda yuborib tekshirib olishingiz ham mumkin!*"
+            "🛡️ **UzPhishGuard Enterprise v4.5 (AI Sandbox) faol!**\n\n"
+            "Meni guruhlaringizga qo'shib adminlik huquqini bering. Men guruhlarni fishingdan himoya qilaman.\n\n"
+            "💬 **Sandbox Rejimi:** Guruhlarga yubormoqchi bo'lgan shubhali matnlaringiz yoki havolalaringizni "
+            "to'g'ridan-to'g'ri menga yuboring, men ularni guruhga zarar yetkazmasdan shu yerning o'zida tahlil qilib beraman!"
         )
 
-# APK fayllar dushmani
+# APK fayllar nazorati
 @dp.message(F.document)
 async def monitor_apk_files(message: types.Message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
@@ -211,48 +210,49 @@ async def monitor_apk_files(message: types.Message):
                 if not is_malicious:
                     is_malicious, risk_score, analysis_details = analyze_apk_permissions(file_bytes)
                 
-                if is_malicious:
-                    final_risk = risk_score
-                    final_details = analysis_details
-                    status_icon = "🔴 REAL TAHID!"
-                    
-                    log_threat_to_db(message.chat.id, chat_title, username, "APK", final_risk, final_details, sha256_hash)
-                    
-                    await message.delete()
-                    
-                    warning_msg = (
-                        f"🛡️ **UzPhishGuard Deep Scan Engine**\n\n"
-                        f"{status_icon}\n"
-                        f"👤 **Yuboruvchi:** {username}\n"
-                        f"📦 **Fayl:** {message.document.file_name}\n"
-                        f"📈 **Xavf darajasi:** {final_risk}%\n"
-                        f"🔬 **Tahlil:** {final_details}\n\n"
-                        f"🔒 *Foydalanuvchilar xavfsizligi uchun zararli ob'ekt yo'q qilindi!*"
-                    )
-                    sent_msg = await message.answer(warning_msg)
-                    
-                    try:
-                        await bot.pin_chat_message(chat_id=message.chat.id, message_id=sent_msg.message_id, disable_notification=False)
-                    except Exception:
-                        pass
+                final_risk = risk_score if is_malicious else 80
+                final_details = analysis_details if is_malicious else "Guruh xavfsizlik siyosatiga ko'ra tekshirilmagan APK bloki."
+                status_icon = "🔴 REAL TAHID!" if is_malicious else "⚠️ SHUBHALI APK!"
+                
+                log_threat_to_db(message.chat.id, chat_title, username, "APK", final_risk, final_details, sha256_hash)
+                
+                await message.delete()
+                
+                warning_msg = (
+                    f"🛡️ **UzPhishGuard Deep Scan Engine**\n\n"
+                    f"{status_icon}\n"
+                    f"👤 **Yuboruvchi:** {username}\n"
+                    f"📦 **Fayl:** {message.document.file_name}\n"
+                    f"📈 **Xavf darajasi:** {final_risk}%\n"
+                    f"🔬 **Tahlil:** {final_details}\n\n"
+                    f"🔒 *Foydalanuvchilar xavfsizligi uchun zararli ob'ekt yo'q qilindi!*"
+                )
+                sent_msg = await message.answer(warning_msg)
+                
+                try:
+                    await bot.pin_chat_message(chat_id=message.chat.id, message_id=sent_msg.message_id, disable_notification=False)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error(f"APK tahlilida xatolik: {e}")
 
-# Matnlar monitoringi (Ham guruh, Ham shaxsiy chat uchun)
+# Matnlar monitoringi (Guruh va Shaxsiy Chat uchun Alohida va Aniq Mantiq)
 @dp.message(F.text)
 async def monitor_text_messages(message: types.Message):
-    if message.from_user.username == "GroupAnonymousBot":
+    # Buyruqlarni o'tkazib yuboramiz (Start va hk xatolik bermasligi uchun)
+    if message.text.startswith("/"):
+        return
+
+    if message.from_user and message.from_user.username == "GroupAnonymousBot":
         return
 
     is_phishing, risk_score, reason = analyze_text_nlp(message.text)
+    username = f"@{message.from_user.username}" if (message.from_user and message.from_user.username) else f"ID: {message.from_user.id}"
 
-    if is_phishing:
-        username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
-
-        # GURUH UCHUN
-        if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+    # 1-Ssenariy: GURUHDA FISHING ANIQLANSA (O'chirish + Pin qilish)
+    if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        if is_phishing:
             chat_title = message.chat.title or "Noma'lum Guruh"
-            
             log_threat_to_db(message.chat.id, chat_title, username, "TEXT/LINK", risk_score, reason, message.text)
             
             try:
@@ -268,23 +268,32 @@ async def monitor_text_messages(message: types.Message):
                 except Exception:
                     pass
             except Exception as e:
-                logger.error(f"Guruhda xabarni o'chirishda xatolik: {e}")
-                
-        # SHAXSIY CHAT UCHUN (Sandbox test)
-        elif message.chat.type == ChatType.PRIVATE:
+                logger.error(f"Guruhda o'chirishda xatolik: {e}")
+
+    # 2-Ssenariy: SHAXSIY CHATDA MATN TEKSHIRILSA (Sandbox Rejimi)
+    elif message.chat.type == ChatType.PRIVATE:
+        if is_phishing:
             report_text = (
                 f"🛡️ **UzPhishGuard AI Sandbox Natijasi** 🛡️\n\n"
                 f"🚨 Siz yuborgan matn / havola **XAVFLI** deb topildi!\n"
                 f"📊 **Xavf darajasi:** {risk_score}%\n"
                 f"🔍 **AI Diagnoz:** {reason}\n\n"
-                f"⚠️ *Ogohlantirish: Ushbu matnni guruhlarga tarqatmang!*"
+                f"⚠️ *Ogohlantirish: Ushbu matn tarkibida kiber-fironlik alomatlari bor. Guruhlarga tarqatmang!*"
             )
-            await message.reply(report_text, parse_mode="Markdown")
+        else:
+            report_text = (
+                f"🛡️ **UzPhishGuard AI Sandbox Natijasi** 🛡️\n\n"
+                f"✅ Matn xavfsiz deb topildi yoki xavf darajasi juda past.\n"
+                f"📊 **Xavf darajasi:** {risk_score}%\n\n"
+                f"💡 *Eslatma: Shunda ham shubhali havolalarga shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!*"
+            )
+        
+        await message.reply(report_text, parse_mode="Markdown")
 
 async def main():
     logger.info("⚡ Supabase arxitekturasi tekshirilmoqda...")
     init_db()
-    logger.info("🛡️ UzPhishGuard Enterprise Core v4.0 (Pin & Sandbox Mode) faollashtirildi.")
+    logger.info("🛡️ UzPhishGuard Enterprise Core v4.5 (Pin & Sandbox Mode) faollashtirildi.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
