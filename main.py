@@ -1,209 +1,188 @@
-# main.py
 import os
 import re
-import asyncio
 import logging
-import asyncpg
-import aiohttp  # requirements.txt ichidagi asinxron kutubxona
-from urllib.parse import urlparse
-from cachetools import TTLCache  # Xotirani himoyalash uchun cache
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import BaseFilter, Command
-from aiogram.enums import ParseMode
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+from aiogram.enums import ChatType
+import psycopg2
+from dotenv import load_dotenv
 
-# 1. Professional Log Tizimi
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# 1. Loggingni sozlash
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-# 2. XAVFSIZLIK QATLAMI: Ma'lumotlar faqat Render panelidan o'qiladi
+# .env faylidan o'zgaruvchilarni yuklash (Lokal muhit uchun)
+load_dotenv()
+
+# 2. Environment Variables (Muhit o'zgaruvchilari)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-if not BOT_TOKEN or not DATABASE_URL:
-    logger.critical("KRITIK XATO: BOT_TOKEN yoki DATABASE_URL topilmadi!")
+if not BOT_TOKEN:
+    logger.critical("XATO: BOT_TOKEN topilmadi! Render'da o'zgaruvchilarni tekshiring.")
     exit(1)
 
+# 3. Bot va Dispatcher obyektlarini yaratish
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-db_pool = None
 
-# 3. MEMORY LEAK PROTECTION: Skrin qilingan linklarni 1 soat davomida keshda saqlash
-# Maksimal 10,000 ta link sig'adi, 3600 soniyadan keyin avtomatik tozalanadi
-url_cache = TTLCache(maxsize=10000, ttl=3600)
-
-URL_PATTERN = re.compile(r'https?://(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
-
-# ==========================================
-# ADVANCED HEURISTICS
-# ==========================================
-def advanced_heuristics_check(url: str) -> bool:
+# 4. Ma'lumotlar bazasiga ulanish va jadvalni tekshirish
+def init_db():
     try:
-        parsed_url = urlparse(url)
-        domain = parsed_url.netloc.lower()
-        if not domain:
-            return False
-
-        suspicious_tlds = {'.xyz', '.tk', '.ru', '.link', '.free', '.click', '.top', '.info', '.net', '.org-uz', '.site', '.online'}
-        target_brands = ['click', 'payme', 'uzcard', 'humo', 'my.gov', 'agro', 'bank', 'soliq', 'olx', 'uzb', 'telegram']
-
-        if any(domain.endswith(tld) for tld in suspicious_tlds):
-            return True
-
-        for brand in target_brands:
-            if brand in domain:
-                if not (domain.endswith(f"{brand}.uz") or domain == f"{brand}.uz" or domain.endswith(f"{brand}.com")):
-                    return True
-        return False
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        # Threats jadvali mavjud bo'lmasa yaratish
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS threats (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                chat_title TEXT,
+                sender_username TEXT,
+                threat_type TEXT,
+                risk_score INTEGER,
+                details TEXT,
+                detected_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info("🛡️ Supabase ma'lumotlar bazasi va jadvallar muvaffaqiyatli tekshirildi.")
     except Exception as e:
-        logger.error(f"Heuristics xatosi: {e}")
-        return False
+        logger.error(f"Bazaga ulanishda xatolik: {e}")
 
-# ==========================================
-# ASINXRON IP ENRICHMENT (AIOHTTP BILAN)
-# ==========================================
-async def get_ip_enrichment_async(url: str) -> dict:
-    context = {"ip_address": "0.0.0.0", "country": "Unknown", "latitude": 41.2995, "longitude": 69.2401}
+# Bazaga fishing hisobotini yozish funksiyasi
+def log_threat_to_db(chat_id, chat_title, username, threat_type, risk_score, details):
     try:
-        parsed_url = urlparse(url)
-        domain = parsed_url.netloc
-
-        # HTTPS xavfsiz ulanish va aiohttp orqali asinxron request
-        timeout = aiohttp.ClientTimeout(total=3.0)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(f"https://dns.google/resolve?name={domain}") as response:
-                if response.status == 200:
-                    dns_data = await response.json()
-                    if "Answer" in dns_data:
-                        ip = dns_data["Answer"][0]["data"].strip('.')
-                        
-                        if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip):
-                            context["ip_address"] = ip
-                            
-                            # Xavfsiz HTTPS Geo API
-                            async with session.get(f"https://ipapi.co/{ip}/json/") as geo_response:
-                                if geo_response.status == 200:
-                                    geo_data = await geo_response.json()
-                                    context["country"] = geo_data.get("country_name", "Unknown")
-                                    context["latitude"] = float(geo_data.get("latitude", 41.2995))
-                                    context["longitude"] = float(geo_data.get("longitude", 69.2401))
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO threats (chat_id, chat_title, sender_username, threat_type, risk_score, details)
+            VALUES (%s, %s, %s, %s, %s, %s);
+        """
+        cursor.execute(query, (str(chat_id), chat_title, username, threat_type, int(risk_score), details))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"💾 Fishing xavfi bazaga saqlandi: {details}")
     except Exception as e:
-        logger.warning(f"IP Enrichment o'tkazib yuborildi: {e}")
-    return context
+        logger.error(f"Bazaga yozishda xatolik: {e}")
 
-# ==========================================
-# HIGH-PERFORMANCE DB ENGINE
-# ==========================================
-async def save_to_siem(chat_title: str, username: str, url: str, status: str, risk_score: int, geo_data: dict):
-    global db_pool
-    if not db_pool:
-        return
+# 5. Kengaytirilgan Fishing va Shubhali Link Filtr Tizimi
+def check_phishing(text: str) -> tuple[bool, int, str]:
+    """
+    Matnni fishing havolalariga tekshiradi.
+    Qaytadi: (is_phishing, risk_score, reason)
+    """
+    if not text:
+        return False, 0, ""
 
-    async with db_pool.acquire() as conn:
-        try:
-            columns_query = "SELECT column_name FROM information_schema.columns WHERE table_name = 'scanned_links';"
-            rows = await conn.fetch(columns_query)
-            existing_columns = {row['column_name'] for row in rows}
-
-            data_map = {
-                "chat_title": str(chat_title),
-                "group_id": str(chat_title),
-                "username": str(username),
-                "user": str(username),
-                "url": str(url),
-                "status": str(status),
-                "risk_score": int(risk_score),
-                "ip_address": str(geo_data["ip_address"]),
-                "country": str(geo_data["country"]),
-                "latitude": float(geo_data["latitude"]),
-                "longitude": float(geo_data["longitude"])
-            }
-
-            valid_data = {k: v for k, v in data_map.items() if k in existing_columns}
-            if not valid_data:
-                return
-
-            columns = ", ".join(valid_data.keys())
-            placeholders = ", ".join([f"${i+1}" for i in range(len(valid_data))])
-            insert_query = f"INSERT INTO scanned_links ({columns}) VALUES ({placeholders});"
-
-            await conn.execute(insert_query, *valid_data.values())
-            logger.info(f"🛡️ [SIEM] Saqlandi: {status} -> {url}")
-        except Exception as e:
-            logger.error(f"❌ [DB ERROR]: {e}")
-
-# ==========================================
-# FILTERS & INTERACTION
-# ==========================================
-class AdvancedLinkFilter(BaseFilter):
-    async def __call__(self, message: types.Message) -> bool:
-        return bool(message.text and URL_PATTERN.search(message.text))
-
-@dp.message(Command("broadcast", "send"))
-async def handle_broadcast(message: types.Message):
-    if str(message.from_user.id) != str(ADMIN_ID).strip():
-        await message.reply("❌ Sizda xabar tarqatish huquqi yo'q!")
-        return
-    await message.reply("📢 Reklama/Xabar tarqatish tizimi faol.")
-
-# ==========================================
-# CORE INCIDENT HANDLER WITH CACHING
-# ==========================================
-@dp.message(AdvancedLinkFilter())
-async def cyber_incident_handler(message: types.Message):
-    text = message.text
-    urls = URL_PATTERN.findall(text)
-
-    chat_title = message.chat.title if message.chat.title else "Cyber Group"
-    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    text_clean = text.lower()
+    
+    # URL'larni ajratib olish (RegEx)
+    urls = re.findall(r'(https?://[^\s]+)', text_clean)
+    
+    # Fishing uchun eng ko'p ishlatiladigan kalit so'zlar
+    phishing_keywords = [
+        "aksiya", "mukofot", "yutuq", "pul-olish", "bonus", "sovg'a", "sovga",
+        "click", "payme", "uzcard", "humo", "olx", "mygov", "bank", "login",
+        "fondi", "omadli", "tg-premium", "premium-tekin", "karta", "pul-bermoqda"
+    ]
+    
+    # Oq ro'yxat (Whitelist) - Rasmiy va xavfsiz saytlar
+    whitelist = ["kun.uz", "daryo.uz", "gazeta.uz", "lex.uz", "gov.uz", "telegram.org"]
 
     for url in urls:
-        # Keshni tekshirish (Agar bu link yaqin 1 soatda tekshirilgan bo'lsa, qayta skan qilmaydi)
-        if url in url_cache:
-            is_phishing, geo_data = url_cache[url]
-        else:
-            is_phishing = advanced_heuristics_check(url)
-            if is_phishing:
-                geo_data = await get_ip_enrichment_async(url)
-            else:
-                geo_data = {"ip_address": "127.0.0.1", "country": "Local", "latitude": 41.2995, "longitude": 69.2401}
+        # Agar havola oq ro'yxatda bo'lsa, uni o'tkazib yuboramiz
+        if any(good_site in url for good_site in whitelist):
+            continue
+
+        # 1-Ssenariy: Havola ichida fishing kalit so'zi qatnashsa (Masalan: uz-aksiya-mukofot.com)
+        if any(keyword in url for keyword in phishing_keywords):
+            return True, 95, f"Shubhali havola aniqlandi (Kalit so'z: {url})"
             
-            # Natijani keshga yozib qo'yamiz
-            url_cache[url] = (is_phishing, geo_data)
+        # 2-Ssenariy: Matnning o'zida ijtimoiy muhandislik so'zlari bo'lib, yonida havola kelsa
+        if any(keyword in text_clean for keyword in ["yutdingiz", "pul tarqatilyapti", "aksiya", "mukofot"]):
+            return True, 90, f"Ijtimoiy muhandislik matni va havola kombinatsiyasi: {url}"
+
+    return False, 0, ""
+
+# 6. HANDLERS (Xabarlarni boshqarish)
+
+# A. Shaxsiy xabarlar uchun (Private DM /start) - BOT ENDI JAVOB BERADI
+@dp.message(CommandStart())
+async def cmd_start_private(message: types.Message):
+    if message.chat.type == ChatType.PRIVATE:
+        await message.answer(
+            "🛡️ **UzPhishGuard Enterprise tizimiga xush kelibsiz!**\n\n"
+            "Meni guruhlaringizga **Administrator** qilib qo'shing hamda xabarlarni "
+            "o'chirish (`Delete Messages`) huquqini bering.\n\n"
+            "Guruhga tashlanadigan har qanday soxta aksiya, mukofot yoki kiber-fishing "
+            "havolalarini lahzalarda o'chirib, guruh a'zolarini firgarlardan himoya qilaman!"
+        )
+
+# B. Guruh xabarlarini tahlil qilish va himoya qilish
+@dp.message()
+async def monitor_group_messages(message: types.Message):
+    # Faqat guruh va superguruhlarda ishlaydi
+    if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
+        
+        # Adminlar xabarlarini tekshirmaslik (ixtiyoriy)
+        if message.from_user.username == "GroupAnonymousBot":
+            return
+
+        is_phishing, risk_score, reason = check_phishing(message.text)
 
         if is_phishing:
+            chat_title = message.chat.title or "Noma'lum Guruh"
+            username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+            
+            # 1. Bazaga yozish (Dashboard uchun)
+            log_threat_to_db(
+                chat_id=message.chat.id,
+                chat_title=chat_title,
+                username=username,
+                threat_type="FISHING_LINK",
+                risk_score=risk_score,
+                details=reason
+            )
+            
+            # 2. Guruhdan fishing xabarini o'chirish
             try:
                 await message.delete()
-            except Exception:
-                logger.warning("Botda xabarni o'chirish huquqi yo'q.")
+                
+                # 3. Guruhga ogohlantirish yuborish
+                warning_text = (
+                    f"🛡️ **UzPhishGuard Himoya Tizimi**\n\n"
+                    f"⚠️ Foydalanuvchi {username} tomonidan yuborilgan shubhali xabar/havola o'chirildi!\n"
+                    f"📈 **Xavf darajasi:** {risk_score}%\n"
+                    f"🚫 **Sabab:** Fishing yoki soxta aksiya elementi aniqlandi. Guruh a'zolarini ogoh bo'lishga chaqiramiz!"
+                )
+                sent_msg = await message.answer(warning_text)
+                
+                # Ogohlantirish xabarini guruh to'lib ketmasligi uchun 15 soniyadan keyin o'chirish
+                await asyncio.sleep(15)
+                await sent_msg.delete()
+                
+            except Exception as e:
+                logger.error(f"Xabarni o'chirishda admin huquqi yetishmadi: {e}")
 
-            alert_text = (
-                f"🛡️ **UzPhishGuard SOC v3 — Enterprise Alert**\n\n"
-                f"👤 **Tahdid Manbasi:** {username}\n"
-                f"❌ **Xavf Turi:** Fishing / Zararli havola aniqlandi.\n"
-                f"📊 **Xavf Darajasi:** `98%` [Kritik]\n"
-                f"🌐 **Server Joylashuvi:** {geo_data['country']} (IP: {geo_data['ip_address']})\n\n"
-                f"ℹ️ *Tafsilotlar SIEM Dashboard markaziy kiber-xaritasiga uzatildi.*"
-            )
-            await message.answer(alert_text, parse_mode=ParseMode.MARKDOWN)
-            await save_to_siem(chat_title, username, url, "BLOCKED", 98, geo_data)
-        else:
-            await save_to_siem(chat_title, username, url, "SAFE", 0, geo_data)
-
-# ==========================================
-# ENGINE STARTUP
-# ==========================================
+# 7. Asosiy ishga tushirish (Main)
 async def main():
-    global db_pool
-    logger.info("⚡ Supabase Connection Pool ochilmoqda...")
-    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    logger.info("⚡ Supabase ulanishi tekshirilmoqda...")
+    init_db()
     
     logger.info("🛡️ UzPhishGuard Enterprise Core faollashtirildi.")
+    logger.info(f"Run polling for bot...")
+    
+    # Botga kelgan eski xabarlarni o'tkazib yuborish (Skip pending updates)
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Bot to'xtatildi.")
+    asyncio.run(main())
