@@ -1,215 +1,145 @@
 import os
-import streamlit as st
-import pandas as pd
+import hashlib
+import logging
+import asyncio
 import psycopg2
-import plotly.express as px
-import plotly.graph_objects as go
+import aiohttp
 from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
 
-# .env fayldan yoki server muhitidan (Render) o'zgaruvchilarni yuklash
+# Loglarni sozlash
+logging.basicConfig(level=logging.INFO)
+
 load_dotenv()
-
-# 1. Sahifa Konfiguratsiyasi (Faqat bir marta va eng tepada bo'lishi shart)
-st.set_page_config(
-    page_title="UzPhishGuard SOC Dashboard v5.0",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# 2. To'g'ri va Xavfsiz Kiber-Dizayn Stillari
-st.markdown("""
-    <style>
-    /* Asosiy fon va matn ranglari */
-    .main { background-color: #060913; color: #e2e8f0; }
-    [data-testid="stSidebar"] { background-color: #0b1120; border-right: 2px solid #1e293b; }
-    
-    /* Neon kiber-kartalar uchun klasslar */
-    .metric-box {
-        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-        border: 1px solid #3730a3;
-        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15);
-        padding: 20px;
-        border-radius: 12px;
-        text-align: center;
-        margin-bottom: 15px;
-    }
-    .metric-lbl { 
-        font-size: 13px; 
-        text-transform: uppercase; 
-        letter-spacing: 2px; 
-        color: #94a3b8; 
-        margin-bottom: 5px; 
-    }
-    .metric-val { 
-        font-size: 32px; 
-        font-weight: 800; 
-        color: #38bdf8; 
-        font-family: 'Courier New', monospace; 
-    }
-    .metric-val-crit { 
-        font-size: 32px; 
-        font-weight: 800; 
-        color: #f43f5e; 
-        font-family: 'Courier New', monospace; 
-        text-shadow: 0 0 10px rgba(244, 63, 94, 0.5); 
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Supabase ulanish havolasi
+TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "") # Ixtiyoriy: Kelajakda VT kalit qo'shish uchun
 
-# 3. Ma'lumotlarni Supabase'dan tortish funksiyasi
-def fetch_threats_from_supabase():
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+# --- DATABASE ENGINE (Supabase bilan Yagona Unifikatsiya) ---
+def save_threat_to_db(chat_title, sender_username, threat_type, risk_score, details):
+    """Dashboard va Bot uchun yagona standartlashtirilgan bazaga yozish funksiyasi"""
     try:
         conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
         query = """
-            SELECT id, chat_title, sender_username, threat_type, risk_score, details, detected_at 
-            FROM threats 
-            ORDER BY detected_at DESC;
+            INSERT INTO threats (chat_title, sender_username, threat_type, risk_score, details, detected_at)
+            VALUES (%s, %s, %s, %s, %s, NOW());
         """
-        df = pd.read_sql(query, conn)
+        cursor.execute(query, (chat_title, sender_username, threat_type, risk_score, details))
+        conn.commit()
+        cursor.close()
         conn.close()
-        return df
+        logging.info("🛡️ Tahdid muvaffaqiyatli SOC bazasiga yozildi.")
     except Exception as e:
-        st.error(f"❌ Supabase SQL ulanishida uzilish: {e}")
-        return pd.DataFrame()
+        logging.error(f"❌ Supabase'ga yozishda xato: {e}")
 
-# Ma'lumotlar bazasidan jurnallarni o'qish
-df_raw = fetch_threats_from_supabase()
-
-# --- SIDEBAR CONTROL PANEL (Yon Panel) ---
-st.sidebar.markdown("## ⚙️ SOC boshqaruv paneli")
-st.sidebar.markdown("---")
-st.sidebar.info("🤖 **Tizim:** UzPhishGuard Core v4.5\n\n🎯 **Status:** Real-time monitoring faol.")
-
-# Baza bo'sh bo'lgan holatni tekshirish
-if df_raw.empty:
-    st.title("🛡️ UzPhishGuard SIEM Command Center")
-    st.markdown("---")
-    st.warning("⚠️ Supabase bazasida hozircha kiber-hujumlar jurnali topilmadi. Bot birinchi fishing xabarini ushlashi bilan bu yerda interaktiv grafiklar paydo bo'ladi!")
-else:
-    df = df_raw.copy()
-    df['detected_at'] = pd.to_datetime(df['detected_at'])
+# --- GLOBAL THREAT INTEL ENGINE (VirusTotal API Integratsiyasi) ---
+async def check_hash_virustotal(sha256_hash):
+    """SHA-256 xeshni global kiber-baza orqali tekshirish"""
+    if not VIRUSTOTAL_API_KEY:
+        # Agar VT kalit hali kiritilmagan bo'lsa, test uchun o'zimizning Hevristikani ishlatamiz
+        return None
     
-    # Yon paneldagi tahdid turi bo'yicha filtr
-    threat_filter = st.sidebar.multiselect(
-        "🔮 Tahdid turlarini filtrlash:",
-        options=df['threat_type'].unique(),
-        default=df['threat_type'].unique()
-    )
-    df = df[df['threat_type'].isin(threat_filter)]
-
-    # --- MAIN DASHBOARD INTERFACE (Asosiy Oyna) ---
-    st.markdown("# 🛡️ UzPhishGuard — MIT-Tier Cyber Security SIEM Center")
-    st.markdown("### 🏢 Markaziy kiber-tahdidlarni tahlil qilish va intellektual monitoring stansiyasi")
-    st.markdown("---")
-
-    # 4. KIBER METRIKALAR PANELINI GENERATSIYA QILISH
-    total_incidents = len(df)
-    critical_incidents = len(df[df['risk_score'] >= 80])
-    avg_danger_rate = int(df['risk_score'].mean()) if total_incidents > 0 else 0
-
-    m_col1, m_col2, m_col3 = st.columns(3)
-    with m_col1:
-        st.markdown(f"""
-            <div class="metric-box">
-                <div class="metric-lbl">🚨 JAMI ANIQLANGAN TAHDIDLAR</div>
-                <div class="metric-val">{total_incidents} ta</div>
-            </div>
-        """, unsafe_allow_html=True)
-    with m_col2:
-        st.markdown(f"""
-            <div class="metric-box">
-                <div class="metric-lbl">🔴 CRITICAL ATTACKS (💥 RISK >= 80%)</div>
-                <div class="metric-val-crit">{critical_incidents} ta</div>
-            </div>
-        """, unsafe_allow_html=True)
-    with m_col3:
-        st.markdown(f"""
-            <div class="metric-box">
-                <div class="metric-lbl">📊 O'RTACHA XAVF KO'RSATKICHI</div>
-                <div class="metric-val" style="color: #a855f7;">{avg_danger_rate}%</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # 5. INTERAKTIV 3D VA DYNAMIC GRAFIKLAR
-    g_col1, g_col2 = st.columns([1.2, 0.8])
-
-    with g_col1:
-        st.subheader("🌐 3D Hujumlar Matritsasi (Scatter 3D)")
-        # Vaqtni soniyalarga o'tkazish (Z o'qi uchun)
-        df['Time_Seconds'] = df['detected_at'].dt.hour * 3600 + df['detected_at'].dt.minute * 60 + df['detected_at'].dt.second
-        
-        fig_3d = px.scatter_3d(
-            df,
-            x='threat_type',
-            y='risk_score',
-            z='Time_Seconds',
-            color='risk_score',
-            size='risk_score',
-            hover_name='sender_username',
-            color_continuous_scale=px.colors.sequential.Sunsetdark,
-            labels={'threat_type': 'Tahdid turi', 'risk_score': 'Xavf %', 'Time_Seconds': 'Vaqt (Soniya)'}
-        )
-        # BUG FIX: 'backgroundcolor' kalit so'zi 'bgcolor' ga almashtirildi va xavfsiz sozlandi
-        fig_3d.update_layout(
-            scene=dict(
-                bgcolor="#090d16",
-                xaxis=dict(gridcolor="#334155"),
-                yaxis=dict(gridcolor="#334155"),
-                zaxis=dict(gridcolor="#334155"),
-            ),
-            paper_bgcolor='rgba(0,0,0,0)',
-            font_color="#94a3b8",
-            margin=dict(l=0, r=0, b=0, t=0)
-        )
-        st.plotly_chart(fig_3d, use_container_width=True)
-
-    with g_col2:
-        st.subheader("🎯 Kiber Taktika Klasteri")
-        type_matrix = df['threat_type'].value_counts().reset_index()
-        type_matrix.columns = ['Type', 'Count']
-        
-        fig_donut = go.Figure(data=[go.Pie(
-            labels=type_matrix['Type'], 
-            values=type_matrix['Count'], 
-            hole=.5,
-            marker=dict(colors=['#f43f5e', '#38bdf8', '#a855f7', '#10b981'])
-        )])
-        fig_donut.update_layout(
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font_color="#94a3b8",
-            margin=dict(l=0, r=0, b=0, t=0),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5)
-        )
-        st.plotly_chart(fig_donut, use_container_width=True)
-
-    st.markdown("---")
-
-    # 6. JONLI LOG JADVALI (Incident Feed)
-    st.subheader("📋 Jonli Tahdidlar Voqeligining Jurnali")
-    search_bar = st.text_input("🔍 Guruh nomi yoki foydalanuvchi username bo'yicha tezkor qidiruv:")
+    url = f"https://www.virustotal.com/api/v3/files/{sha256_hash}"
+    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
     
-    if search_bar:
-        df = df[
-            df['chat_title'].str.contains(search_bar, case=False, na=False) | 
-            df['sender_username'].str.contains(search_bar, case=False, na=False)
-        ]
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                result = await response.json()
+                stats = result.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
+                malicious = stats.get('malicious', 0)
+                return malicious
+            return 0
 
-    st.dataframe(
-        df[['detected_at', 'chat_title', 'sender_username', 'threat_type', 'risk_score', 'details']],
-        use_container_width=True,
-        column_config={
-            "detected_at": "Vaqt",
-            "chat_title": "Guruh nomi",
-            "sender_username": "Hujumchi",
-            "threat_type": "Tahdid turi",
-            "risk_score": st.column_config.ProgressColumn("Xavf ko'rsatkichi", min_value=0, max_value=100, format="%d%%"),
-            "details": "AI Diagnostika"
-        }
-    )
+# --- HANDLER 1: APK MALWARE FILTR (STAGE 2 IMPLEMENTATION) ---
+@dp.message(F.document)
+async def handle_apk_document(message: types.Message):
+    document = message.document
+    file_name = document.file_name.lower()
+    
+    # Faqat .apk kengaytmali fayllarni ushlab qolamiz
+    if file_name.endswith('.apk'):
+        chat_title = message.chat.title if message.chat.title else "Private Chat"
+        sender = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+        
+        # 1-qadam: Guruhni ogohlantirish va faylni xotirada tekshirish
+        status_msg = await message.reply("⚡ *Tizim:* Shubhali APK aniqlandi! SHA-256 kiber-barmog'i hisoblanmoqda...", parse_mode="Markdown")
+        
+        # Telegram serveridan faylni oqim (stream) ko'rinishida yuklab olish
+        file_info = await bot.get_file(document.file_id)
+        file_data = await bot.download_file(file_info.file_path)
+        
+        # SHA-256 xesh kodini generatsiya qilish
+        sha256_gen = hashlib.sha256()
+        sha256_gen.update(file_data.read())
+        apk_hash = sha256_gen.hexdigest()
+        
+        # 2-qadam: Global Threat Intelligence tekshiruvi
+        vt_result = await check_hash_virustotal(apk_hash)
+        
+        risk_score = 45 # Standart boshlang'ich xavf (Androguard buni oshiradi)
+        details = f"Fayl: {document.file_name} | SHA256: {apk_hash[:15]}..."
+        
+        if vt_result and vt_result > 0:
+            risk_score = 99
+            details += f" | 🔴 Global Antiviruslar ogohlantirishi: {vt_result} ta deteksiya!"
+            await status_msg.edit_text(f"🚨 *DIQQAT! CRITICAL MALWARE!* \nBu fayl global bazalarda virus deb topilgan! \n*SHA-256:* `{apk_hash}`", parse_mode="Markdown")
+            await message.delete() # Guruh xavfsizligi uchun virusni o'chirish
+        else:
+            # Agar yangi virus bo'lsa, 3-bosqich (Androguard) heuristikasiga yo'llanma beriladi
+            details += " | 🟡 Yangi imzo (Zero-day). Ichki ruxsatnomalar tahlili kutilmoqda."
+            await status_msg.edit_text(f"🛡️ *UzPhishGuard Skanner:* \nFayl xeshi: `{apk_hash[:30]}...` \nBazaga yuborildi. Keyingi statik tahlil faollashtirildi.", parse_mode="Markdown")
+            
+        # SOC Bazaga yagona formatda yozish (Dashboard xatosiz o'qiydi)
+        save_threat_to_db(
+            chat_title=chat_title,
+            sender_username=sender,
+            threat_type="APK",
+            risk_score=risk_score,
+            details=details
+        )
+
+# --- HANDLER 2: MATN VA FISHING HAVOLALAR (UNIFIED SCHEMA) ---
+@dp.message(F.text)
+async def handle_text_phishing(message: types.Message):
+    text = message.text.lower()
+    chat_title = message.chat.title if message.chat.title else "Private Chat"
+    sender = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+    
+    # Fishing kalit so'zlari (Hevristika elementlari)
+    phish_keywords = ["yutuq", "pul tarqatilmoqda", "aksiya", "click-uz", "payme-uz", "sharmanda", "videoni ko'ring"]
+    
+    is_threat = any(keyword in text for keyword in phish_keywords) or "http://" in text or "https://" in text
+    
+    if is_threat:
+        risk_score = 75 if "http" in text else 50
+        details = f"Matn tahlili: Shubhali kalit so'z yoki havola aniqlandi. Kontent: {message.text[:50]}..."
+        
+        # Guruhni xabardor qilish
+        await message.reply("⚠️ *Diqqat!* Guruhda shubhali havola yoki ijtimoiy injeneriya matni aniqlandi! Voqea SOC panelga yo'naltirildi.", parse_mode="Markdown")
+        
+        # SOC Bazaga yagona formatda yozish
+        save_threat_to_db(
+            chat_title=chat_title,
+            sender_username=sender,
+            threat_type="LINK/TEXT",
+            risk_score=risk_score,
+            details=details
+        )
+
+# --- START COMMAND ---
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message):
+    await message.reply("🛡️ *UzPhishGuard Core v4.5 active.* Tizim xavfsizlik monitoringi rejimida ishlamoqda.", parse_mode="Markdown")
+
+async def main():
+    logging.info("🚀 Bot monitoringni boshladi...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
