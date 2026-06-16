@@ -7,3 +7,4 @@ aiohttp>=3.9.0
 streamlit>=1.30.0
 plotly>=5.18.0
 pandas>=2.1.0
+androguard>=4.1.1
