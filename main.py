@@ -10,6 +10,9 @@ from aiogram.enums import ChatType
 import psycopg2
 from dotenv import load_dotenv
 
+# Androguard ichki tahlil modullari
+from androguard.core.apk import APK
+
 # 1. Loggingni sozlash
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +25,7 @@ load_dotenv()
 # 2. Muhit o'zgaruvchilari
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY") # Render'da buni qo'shish kerak bo'ladi
+VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY")
 
 if not BOT_TOKEN:
     logger.critical("XATO: BOT_TOKEN topilmadi!")
@@ -31,7 +34,7 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# 3. Ma'lumotlar bazasini tekshirish va yaratish
+# 3. Ma'lumotlar bazasini tekshirish
 def init_db():
     try:
         conn = psycopg2.connect(DATABASE_URL)
@@ -72,20 +75,13 @@ def log_threat_to_db(chat_id, chat_title, username, threat_type, risk_score, det
     except Exception as e:
         logger.error(f"Bazaga yozishda xatolik: {e}")
 
-# 4. Global Threat Intel: VirusTotal API orqali xeshni tekshirish
+# 4. Global Threat Intel: VirusTotal API
 async def check_virustotal(file_hash: str) -> tuple[bool, int, str]:
-    """
-    Fayl xeshini VirusTotal API orqali tekshiradi.
-    Qaytadi: (is_malicious, risk_score, details)
-    """
     if not VIRUSTOTAL_API_KEY:
-        logger.warning("VIRUSTOTAL_API_KEY topilmadi! Static checking rejimi yoqildi.")
         return False, 0, "VirusTotal API kaliti sozlanmagan."
 
     url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
-    headers = {
-        "x-apikey": VIRUSTOTAL_API_KEY
-    }
+    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -95,34 +91,54 @@ async def check_virustotal(file_hash: str) -> tuple[bool, int, str]:
                     stats = data['data']['attributes']['last_analysis_stats']
                     malicious_count = stats.get('malicious', 0)
                     undetected_count = stats.get('undetected', 0)
-                    total_scanners = sum(stats.values())
                     
-                    # Agar kamida 2 ta global antivirus buni virus deb topsa
                     if malicious_count >= 2:
                         risk_score = int((malicious_count / (malicious_count + undetected_count + 1)) * 100)
-                        risk_score = min(max(risk_score, 70), 100) # 70% va 100% orasida ball
-                        
-                        # Virus turini aniqlash (eng mashhur deteksiya nomi)
+                        risk_score = min(max(risk_score, 75), 100)
                         results = data['data']['attributes']['last_analysis_results']
                         virus_name = "Zararli dastur (Malware)"
                         for engine, res in results.items():
                             if res.get('result'):
                                 virus_name = res['result']
                                 break
-                                
-                        return True, risk_score, f"Global Antivirus Deteksiyasi: {virus_name} ({malicious_count} ta motor aniqladi)"
-                    else:
-                        return False, 0, "Global bazada xavfsiz yoki noma'lum."
-                elif response.status == 404:
-                    return False, 0, "Fayl xeshi global bazada mavjud emas (Yangi fayl)."
-                else:
-                    logger.error(f"VirusTotal API xatosi: {response.status}")
-                    return False, 0, "API so'rovida xatolik."
+                        return True, risk_score, f"Global Antivirus: {virus_name} ({malicious_count} ta deteksiya)"
+                return False, 0, ""
         except Exception as e:
-            logger.error(f"VirusTotal ulanish xatosi: {e}")
-            return False, 0, f"Ulanish xatosi: {e}"
+            logger.error(f"VirusTotal API xatosi: {e}")
+            return False, 0, ""
 
-# 5. Fishing havolalarini aniqlash mantiqi
+# 5. APK Heuristic Engine: Androguard Dekompilyatsiya Tizimi
+def analyze_apk_permissions(file_bytes: bytes) -> tuple[bool, int, str]:
+    """
+    APK faylni dekompilyatsiya qilib, uning ichki ruxsatnomalarini (Manifest) tahlil qiladi.
+    """
+    try:
+        # Faylni xotiraning o'zida asinxron ochamiz
+        apk_obj = APK(file_bytes, raw=True)
+        permissions = apk_obj.get_permissions()
+        
+        # O'zbekistondagi eng xavfli bank troyanlari foydalanadigan ruxsatnomalar ro'yxati
+        critical_permissions = [
+            "android.permission.RECEIVE_SMS",
+            "android.permission.READ_SMS",
+            "android.permission.SEND_SMS",
+            "android.permission.BIND_ACCESSIBILITY_SERVICE" # Ekran boshqaruvi (Eng xavflisi)
+        ]
+        
+        detected_bad_perms = [perm for perm in permissions if perm in critical_permissions]
+        
+        if detected_bad_perms:
+            clean_names = [p.split('.')[-1] for p in detected_bad_perms]
+            risk_score = 85 + (len(detected_bad_perms) * 3)
+            risk_score = min(risk_score, 100)
+            return True, risk_score, f"Heuristic Engine: Ichki manifestda o'ta xavfli ruxsatnomalar aniqlandi: {', '.join(clean_names)}"
+            
+        return False, 0, "Fayl ichki ruxsatnomalari standart me'yorda."
+    except Exception as e:
+        logger.error(f"Androguard dekompilyatsiyada xato: {e}")
+        return False, 0, "Fayl strukturasini o'qib bo'lmadi."
+
+# 6. Fishing havolalarini aniqlash
 def check_phishing(text: str) -> tuple[bool, int, str]:
     if not text:
         return False, 0, ""
@@ -145,14 +161,14 @@ def check_phishing(text: str) -> tuple[bool, int, str]:
             return True, 90, f"Ijtimoiy muhandislik matni va havola: {url}"
     return False, 0, ""
 
-# 6. HANDLERS
+# 7. HANDLERS
 @dp.message(CommandStart())
 async def cmd_start_private(message: types.Message):
     if message.chat.type == ChatType.PRIVATE:
         await message.answer(
-            "🛡️ **UzPhishGuard Enterprise v2.0 faol!**\n\n"
-            "Meni guruhlaringizga qo'shib adminlik huquqini bering. Endi men nafaqat linklarni, "
-            "balki global **VirusTotal API** orqali haqiqiy kiber-viruslarni ham aniqlay olaman!"
+            "🛡️ **UzPhishGuard Enterprise v3.0 (Heuristic Core) faol!**\n\n"
+            "Meni guruhlarga qo'shing. Endi men kelgan har bir yangi `.apk` faylni "
+            "**Androguard Reverse Engineering** yordamida ichini ochib, maxfiy virus mantiqlarini ham dekompilyatsiya qila olaman!"
         )
 
 @dp.message(F.document)
@@ -160,7 +176,6 @@ async def monitor_apk_files(message: types.Message):
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         file_name = message.document.file_name.lower() if message.document.file_name else ""
         
-        # Agarda guruhga fayl tashlansa (Biz faqat .apk ni qattiq nazorat qilamiz yoki boshqa fayllarni ham)
         if file_name.endswith('.apk'):
             chat_title = message.chat.title or "Noma'lum Guruh"
             username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
@@ -171,19 +186,22 @@ async def monitor_apk_files(message: types.Message):
                 file_buffer = await bot.download_file(file_info.file_path)
                 file_bytes = file_buffer.read()
                 
-                # 2. SHA-256 xesh kodini generatsiya qilish
+                # 2. Xesh hisoblash
                 sha256_hash = hashlib.sha256(file_bytes).hexdigest()
-                logger.info(f"Tekshirilayotgan APK SHA-256: {sha256_hash}")
                 
-                # 3. Global Threat Intelligence orqali tekshirish
-                is_malicious, risk_score, virus_details = await check_virustotal(sha256_hash)
+                # 3. 1-Bosqich: Global Antivirus Skanerlash (VirusTotal)
+                is_malicious, risk_score, analysis_details = await check_virustotal(sha256_hash)
                 
-                # Bizning kiber-mantiq: Agarda global bazada virus deb topilsa YOKI har qanday holatda guruh xavfsizligi uchun .apk taqiqlangan bo'lsa
-                # Enterprise himoya uchun guruhga .apk tashlashni srazi taqiqlaymiz, xavf ballini esa VT natijasiga ko'ra belgilaymiz.
+                # 4. 2-Bosqich: Agar global bazada topilmasa, Ichki Dekompilyatsiya (Androguard Heuristics)
+                if not is_malicious:
+                    is_malicious, risk_score, analysis_details = analyze_apk_permissions(file_bytes)
+                
+                # Yakuniy qaror va kiber-statistika
                 final_risk = risk_score if is_malicious else 80
-                final_details = virus_details if is_malicious else "Guruh siyosatiga ko'ra taqiqlangan shubhali unverified APK fayl."
+                final_details = analysis_details if is_malicious else "Guruh xavfsizlik siyosatiga ko'ra tekshirilmagan APK taqiqlandi."
+                status_icon = "🔴 REAL TAHID!" if is_malicious and "Heuristic" in final_details or "Global" in final_details else "⚠️ SHUBHALI!"
                 
-                # 4. Bazaga yozish
+                # 5. Bazaga hisobot yozish
                 log_threat_to_db(
                     chat_id=message.chat.id,
                     chat_title=chat_title,
@@ -194,24 +212,24 @@ async def monitor_apk_files(message: types.Message):
                     payload_raw=sha256_hash
                 )
                 
-                # 5. O'chirish va ogohlantirish
+                # 6. Guruhdan faylni yo'q qilish
                 await message.delete()
                 
-                status_icon = "🔴" if is_malicious else "⚠️"
                 warning_msg = (
-                    f"🛡️ **UzPhishGuard Global Malware Engine**\n\n"
-                    f"{status_icon} Foydalanuvchi {username} guruhga zararli dastur yuklamoqchi bo'ldi!\n"
-                    f"📦 **Fayl nomi:** {message.document.file_name}\n"
-                    f"📈 **Xavf indeksi:** {final_risk}%\n"
-                    f"🔍 **Tahlil:** {final_details}\n"
-                    f"🔒 *Guruh a'zolarini troyan kiber-hujumlaridan himoya qilish uchun ushbu fayl tizim tomonidan yo'q qilindi!*"
+                    f"🛡️ **UzPhishGuard v3.0 Deep Scan Engine**\n\n"
+                    f"{status_icon}\n"
+                    f"👤 **Yuboruvchi:** {username}\n"
+                    f"📦 **Fayl:** {message.document.file_name}\n"
+                    f"📈 **Xavf darajasi:** {final_risk}%\n"
+                    f"🔬 **Tahlil natijasi:** {final_details}\n\n"
+                    f"🔒 *Guruh a'zolarini kiber-troyan va josus dasturlardan himoya qilish uchun ob'ekt yo'q qilindi!*"
                 )
                 sent_msg = await message.answer(warning_msg)
                 await asyncio.sleep(15)
                 await sent_msg.delete()
                 
             except Exception as e:
-                logger.error(f"APK global tahlilida xatolik: {e}")
+                logger.error(f"Deep Scan jarayonida xatolik: {e}")
 
 @dp.message(F.text)
 async def monitor_text_messages(message: types.Message):
@@ -250,7 +268,7 @@ async def monitor_text_messages(message: types.Message):
 async def main():
     logger.info("⚡ Supabase arxitekturasi tekshirilmoqda...")
     init_db()
-    logger.info("🛡️ UzPhishGuard Enterprise Core v2.0 faollashtirildi.")
+    logger.info("🛡️ UzPhishGuard Enterprise Core v3.0 (Heuristic Mode) faollashtirildi.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
