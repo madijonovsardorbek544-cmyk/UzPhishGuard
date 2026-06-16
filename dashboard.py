@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. To'g'ri va Xavfsiz Kiber-Dizayn Stillari (Xatoliksiz variant)
+# 2. To'g'ri va Xavfsiz Kiber-Dizayn Stillari
 st.markdown("""
     <style>
     /* Asosiy fon va matn ranglari */
@@ -88,7 +88,7 @@ st.sidebar.info("🤖 **Tizim:** UzPhishGuard Core v4.5\n\n🎯 **Status:** Real
 if df_raw.empty:
     st.title("🛡️ UzPhishGuard SIEM Command Center")
     st.markdown("---")
-    st.warning("⚠️ Supabase bazasida hozircha kiber-hujumlar jurnali topilmadi. Bot birinchi fishing xabarini ushlashi bilan bu yerda interaktiv 3D grafiklar paydo bo'ladi!")
+    st.warning("⚠️ Supabase bazasida hozircha kiber-hujumlar jurnali topilmadi. Bot birinchi fishing xabarini ushlashi bilan bu yerda interaktiv grafiklar paydo bo'ladi!")
 else:
     df = df_raw.copy()
     df['detected_at'] = pd.to_datetime(df['detected_at'])
@@ -155,14 +155,16 @@ else:
             color_continuous_scale=px.colors.sequential.Sunsetdark,
             labels={'threat_type': 'Tahdid turi', 'risk_score': 'Xavf %', 'Time_Seconds': 'Vaqt (Soniya)'}
         )
+        # BUG FIX: 'backgroundcolor' kalit so'zi 'bgcolor' ga almashtirildi va xavfsiz sozlandi
         fig_3d.update_layout(
             scene=dict(
-                backgroundcolor="#090d16",
-                xaxis=dict(backgroundcolor="#0f172a", gridcolor="#334155"),
-                yaxis=dict(backgroundcolor="#0f172a", gridcolor="#334155"),
-                zaxis=dict(backgroundcolor="#0f172a", gridcolor="#334155"),
+                bgcolor="#090d16",
+                xaxis=dict(gridcolor="#334155"),
+                yaxis=dict(gridcolor="#334155"),
+                zaxis=dict(gridcolor="#334155"),
             ),
             paper_bgcolor='rgba(0,0,0,0)',
+            font_color="#94a3b8",
             margin=dict(l=0, r=0, b=0, t=0)
         )
         st.plotly_chart(fig_3d, use_container_width=True)
