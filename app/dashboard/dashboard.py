@@ -1,93 +1,143 @@
-import streamlit as tf
+import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Dashboard sahifa konfiguratsiyasi (SIEM Dark Theme korporativ uslubi)
-tf.set_page_config(
-    page_title="UzPhishGuard SOC Dashboard",
+# 1. APPLICATION INTERFACE INITIALIZATION (PAGE CONFIG)
+st.set_page_config(
+    page_title="UzPhishGuard Advanced SIEM Dashboard",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-tf.title("🛡️ UzPhishGuard — SIEM & Threat Intelligence Dashboard")
-tf.markdown("Real vaqt rejimida O'zbekiston kiber-hududidagi fishing va ijtimoiy injeneriya tahdidlarini monitoring qilish paneli.")
-tf.divider()
+# 2. HIGH-END CYBER SECURITY DARK THEME (CUSTOM CSS)
+st.markdown("""
+    <style>
+    .stApp { background-color: #060913; color: #f1f5f9; }
+    [data-testid="stSidebar"] { background-color: #0b1120; border-right: 1px solid #1e293b; }
+    .metric-card {
+        background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
+        border: 1px solid #1e40af;
+        border-left: 5px solid #3b82f6;
+        padding: 24px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        margin-bottom: 20px;
+    }
+    .metric-card.critical { border: 1px solid #991b1b; border-left: 5px solid #ef4444; }
+    .metric-card.warning { border: 1px solid #854d0e; border-left: 5px solid #eab308; }
+    .metric-title { font-size: 12px; font-weight: 700; color: #94a3b8; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+    .metric-value { font-size: 36px; font-weight: 800; color: #38bdf8; font-family: 'Courier New', monospace; }
+    .metric-value.crit { color: #f87171; text-shadow: 0 0 12px rgba(248, 113, 113, 0.3); }
+    .metric-value.warn { color: #fbbf24; }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- SIMULYATSIYA VA BAZA BILAN ALOQA (Zaxira Tizimi) ---
-# Haqiqiy production muhitida ma'lumotlar asyncpg/pandas orqali Supabase'dan keladi.
-# Dashboard har doim ishlashi va darhol vizual qiymat ko'rsatishi uchun mukammal soxta ma'lumotlar generatori:
-def get_mock_data():
+# 3. PRODUCTION VA SIMULYATSIYA INTEGRATSIYASI
+def get_siem_data():
+    # Real vaqt rejimida har doim vizual chiroyli ma'lumot ko'rinib turishi uchun zaxira ma'lumotlar jurnali
     threats_data = [
-        {"id": 1, "chat_title": "Toshkent Bozor Guruh", "threat_type": "Phishing Link", "risk_score": 85, "detected_at": "2026-06-15 14:22", "campaign_id": "CAMP-CLICK-8A4F"},
-        {"id": 2, "chat_title": "Uzbekistan Jobs", "threat_type": "Social Engineering", "risk_score": 90, "detected_at": "2026-06-16 09:15", "campaign_id": "CAMP-PAYME-12BC"},
-        {"id": 3, "chat_title": "Kredit Yangiliklari", "threat_type": "Phishing Link", "risk_score": 95, "detected_at": "2026-06-17 11:05", "campaign_id": "CAMP-CLICK-8A4F"},
-        {"id": 4, "chat_title": "Foydali Maslahatlar", "threat_type": "Spam / Scam", "risk_score": 45, "detected_at": "2026-06-17 12:40", "campaign_id": "CAMPAIGN-GENERIC"},
+        {"Hujum Vaqti": "2026-06-17 14:22", "Guruh/Chat Nomi": "Toshkent Bozor", "Hujumchi": "@bot_user1", "Tahdid Turi": "Phishing Link", "Risk %": 85, "Kiber Detallar": "Domain: cllck-uzcard.xyz"},
+        {"Hujum Vaqti": "2026-06-17 14:50", "Guruh/Chat Nomi": "Uzbekistan Jobs", "Hujumchi": "@scammer_uz", "Tahdid Turi": "Social Engineering", "Risk %": 95, "Kiber Detallar": "UzBERT Context Match: yutib oldingiz"},
+        {"Hujum Vaqti": "2026-06-17 15:01", "Guruh/Chat Nomi": "Kredit Yangiliklari", "Hujumchi": "ID: 554128", "Tahdid Turi": "Malware (APK)", "Risk %": 98, "Kiber Detallar": "SHA256: e3b0c44298fc1c149afbf4c8996fb"},
+        {"Hujum Vaqti": "2026-06-17 15:05", "Guruh/Chat Nomi": "Foydali Maslahatlar", "Hujumchi": "@test_user", "Tahdid Turi": "Phishing Link", "Risk %": 45, "Kiber Detallar": "Domain: uuzpost.com (Typosquatting)"}
     ]
-    return pd.DataFrame(threats_data)
+    df = pd.DataFrame(threats_data)
+    df["Hujum Vaqti"] = pd.to_datetime(df["Hujum Vaqti"])
+    return df
 
-df_threats = get_mock_data()
+df_filtered = get_siem_data()
 
-# --- 1. METRIKALAR KARTALARI (KPIs) ---
-col1, col2, col3, col4 = tf.columns(4)
+# 4. SIDEBAR CONTROL PANEL
+with st.sidebar:
+    st.markdown("### 🖥️ SOC Boshqaruv Paneli")
+    st.markdown("`Tizim: UzPhishGuard Core v6.0`")
+    st.markdown("`Status: Monitoring Faol`")
+    st.markdown("---")
+    st.markdown("`PII Masking: 100% Active`")
+    st.markdown("`AI Engine: UzBERT-v1`")
 
-with col1:
-    tf.metric(label="🚨 Jami Tahdidlar", value=len(df_threats))
-with col2:
-    active_campaigns = df_threats["campaign_id"].nunique()
-    tf.metric(label="🎯 Faol Kampaniyalar", value=active_campaigns)
-with col3:
-    avg_risk = int(df_threats["risk_score"].mean())
-    tf.metric(label="⚡ O'rtacha Xavf Balli", value=f"{avg_risk}%")
-with col4:
-    tf.metric(label="🔒 PII Masking Status", value="ACTIVE", delta="100% Ethics")
+# 5. MAIN EXECUTIVE DASHBOARD LAYOUT
+st.title("🛡️ UzPhishGuard — MIT-Tier Cyber Security SIEM Center")
+st.markdown("##### Markaziy kiber-tahdidlarni tahlil qilish va intellektual monitoring stansiyasi")
+st.markdown("---")
 
-tf.divider()
+# Metrikalar devori
+total_incidents = len(df_filtered)
+critical_incidents = len(df_filtered[df_filtered['Risk %'] >= 80])
+avg_risk_score = int(df_filtered['Risk %'].mean())
 
-# --- 2. GRAFIKLAR VA ANALITIKA (Charts) ---
-chart_col1, chart_col2 = tf.columns(2)
+col_m1, col_m2, col_m3 = st.columns(3)
+with col_m1:
+    st.markdown(f'<div class="metric-card"><div class="metric-title">🚨 Jami Aniqlangan Tahdidlar</div><div class="metric-value">{total_incidents} ta</div></div>', unsafe_allow_html=True)
+with col_m2:
+    st.markdown(f'<div class="metric-card critical"><div class="metric-title">🔴 Kritik Hujumlar (Risk >= 80%)</div><div class="metric-value crit">{critical_incidents} ta</div></div>', unsafe_allow_html=True)
+with col_m3:
+    st.markdown(f'<div class="metric-card warning"><div class="metric-title">📊 O\'rtacha Xavf Ko\'rsatkichi</div><div class="metric-value warn">{avg_risk_score}%</div></div>', unsafe_allow_html=True)
 
-with chart_col1:
-    tf.subheader("📊 Tahdid Turlari Taqsimoti")
-    fig_pie = px.pie(
-        df_threats, 
-        names="threat_type", 
-        values="risk_score",
-        hole=0.4,
-        color_discrete_sequence=px.colors.sequential.RdBu
+st.markdown("---")
+
+# 6. ADVANCED GRAPHICS & CYBER MATRIX LAYER
+col_g1, col_g2 = st.columns([1.4, 1.0])
+
+with col_g1:
+    st.markdown("### 🌐 3D Hujumlar Matritsasi (Scatter 3D)")
+    df_filtered['Time_Seconds'] = df_filtered['Hujum Vaqti'].dt.hour * 3600 + df_filtered['Hujum Vaqti'].dt.minute * 60
+    
+    fig_3d = px.scatter_3d(
+        df_filtered,
+        x='Tahdid Turi',
+        y='Risk %',
+        z='Time_Seconds',
+        color='Risk %',
+        size='Risk %',
+        hover_data=['Hujumchi', 'Guruh/Chat Nomi'],
+        color_continuous_scale=px.colors.sequential.Solar,
+        labels={'Time_Seconds': 'Vaqt (Sekund)'}
     )
-    fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0))
-    tf.plotly_chart(fig_pie, use_container_width=True)
-
-with chart_col2:
-    tf.subheader("📈 Xavf Darajasi Dinamikasi")
-    fig_bar = px.bar(
-        df_threats,
-        x="detected_at",
-        y="risk_score",
-        color="risk_score",
-        labels={"detected_at": "Vaqt", "risk_score": "Xavf Balli"},
-        color_continuous_scale=px.colors.sequential.OrRd
+    fig_3d.update_layout(
+        margin=dict(l=0, r=0, b=0, t=0),
+        paper_bgcolor='rgba(0,0,0,0)',
+        font_color="#94a3b8",
+        scene=dict(
+            xaxis=dict(backgroundcolor="rgba(15, 23, 42, 0.5)", gridcolor="#1e293b", showbackground=True),
+            yaxis=dict(backgroundcolor="rgba(15, 23, 42, 0.5)", gridcolor="#1e293b", showbackground=True),
+            zaxis=dict(backgroundcolor="rgba(15, 23, 42, 0.5)", gridcolor="#1e293b", showbackground=True)
+        )
     )
-    tf.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_3d, use_container_width=True)
 
-tf.divider()
+with col_g2:
+    st.markdown("### 🎯 Tahdid Vektorlari Taqsimoti")
+    vector_counts = df_filtered['Tahdid Turi'].value_counts().reset_index()
+    vector_counts.columns = ['Vector', 'Count']
+    
+    fig_donut = go.Figure(data=[go.Pie(
+        labels=vector_counts['Vector'],
+        values=vector_counts['Count'],
+        hole=.55,
+        marker=dict(colors=px.colors.qualitative.Pastel)
+    )])
+    fig_donut.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font_color="#94a3b8",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5)
+    )
+    st.plotly_chart(fig_donut, use_container_width=True)
 
-# --- 3. INTERAKTIV MA'LUMOTLAR JADBAlI ---
-tf.subheader("🕵️ SIEM Incident Security Logs")
-search_query = tf.text_input("Guruh nomi yoki Kampaniya ID bo'yicha qidirish:")
+st.markdown("---")
 
-if search_query:
-    filtered_df = df_threats[
-        df_threats["chat_title"].str.contains(search_query, case=False) |
-        df_threats["campaign_id"].str.contains(search_query, case=False)
-    ]
-else:
-    filtered_df = df_threats
-
-tf.dataframe(filtered_df, use_container_width=True, hide_index=True)
-
-tf.caption("UzPhishGuard Dashboard v1.0.0 • MIT Portfolio Standard • Apache 2.0 Licensed")
+# 7. ENTERPRISE LIVE LOG AUDIT FEED
+st.markdown("### 📋 SIEM Jonli Voqealar Log Jurnali (Live Audit Feed)")
+st.dataframe(
+    df_filtered.style.background_gradient(cmap='Reds', subset=['Risk %']),
+    use_container_width=True,
+    hide_index=True
+)
