@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 st.set_page_config(page_title="UzPhishGuard SOC Panel", page_icon="🛡️", layout="wide")
 
+# DIQQAT: Xato shu yerda edi. "unsafe_allow_html=True" qilib to'g'irlandi.
 st.markdown("""
     <style>
     .main { background-color: #060913; color: #e2e8f0; }
@@ -27,7 +28,7 @@ DB_URL = os.getenv("DATABASE_URL")
 if DB_URL and DB_URL.startswith("postgres://"):
     DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
 
-@st.cache_data(ttl=10) # Baza qiynalmasligi uchun ma'lumotni 10 soniyaga kesh qilamiz
+@st.cache_data(ttl=10) 
 def fetch_data(url):
     if not url:
         return pd.DataFrame()
@@ -71,6 +72,7 @@ else:
             size="risk_score", hover_data=["sender_username", "chat_title"],
             color_discrete_sequence=px.colors.qualitative.Set1
         )
+        # Plotly xatosi ham to'g'irlandi (backgroundcolor emas, plot_bgcolor va paper_bgcolor)
         fig_scatter.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_color="#94a3b8")
         st.plotly_chart(fig_scatter, use_container_width=True)
 
@@ -86,5 +88,5 @@ else:
     st.dataframe(df[['detected_at', 'chat_title', 'sender_username', 'threat_type', 'risk_score', 'details']], use_container_width=True)
 
     if st.button("🔄 Yangilash"):
-        fetch_data.clear() # Keshni tozalab majburiy yangilash
+        fetch_data.clear() 
         st.rerun()
