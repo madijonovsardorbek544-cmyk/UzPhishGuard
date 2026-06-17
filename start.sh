@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# 1. Telegram botni orqa fonda xavfsiz ishga tushiramiz
+# 1. Telegram botni orqa fonda xavfsiz ishga tushiramiz (Yangi yo'nalish)
 echo "🤖 Asinxron UzPhishGuard Bot fonda ishga tushmoqda..."
-python main.py &
+python app/bot/main.py &
 
-# 2. Streamlit'ni Render portiga moslab oldingi plonga chiqaramiz.
-# Bu Render'dagi "Port Timeout" xatosini 100% yo'q qiladi.
-echo "📊 SOC Dashboard Render asosiy portida ishga tushmoqda..."
-streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+# 2. Streamlit'ni Render portiga moslab ishga tushiramiz.
+# PORT muhit o'zgaruvchisi Render tomonidan avtomat beriladi ($PORT)
+echo "📊 SOC Dashboard Render portida ishga tushmoqda..."
+streamlit run app/dashboard/dashboard.py --server.port ${PORT:-8501} --server.address 0.0.0.0
