@@ -19,5 +19,6 @@ COPY . .
 # 6. Python loyiha yo'lini tizimga tanitish (Import xatoliklarini oldini oladi)
 ENV PYTHONPATH=/app
 
-# 7. Default komanda (docker-compose buni o'zgartira oladi)
-CMD ["python", "app/bot/main.py"]
+# 7. Default komanda (start.sh skriptiga ruxsat berib, uni ishga tushiramiz)
+RUN chmod +x start.sh
+CMD ["./start.sh"]
