@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # 🤖 1-XIZMAT: Telegram Bot Mikroxizmati
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python app/bot/main.py
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - db
+    networks:
+      - uzphish_network
+
+  # 📊 2-XIZMAT: SIEM Dashboard Mikroxizmati (Streamlit)
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: streamlit run app/dashboard/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - db
+    networks:
+      - uzphish_network
+
+  # 💾 3-XIZMAT: Mahalliy testlar va kesh uchun PostgreSQL bazasi (Ishlab chiqarishda Supabase'ga bog'lanadi)
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-uzphish_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-uzphish_secure_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-uzphish_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - uzphish_network
+
+volumes:
+  postgres_data:
+
+networks:
+  uzphish_network:
+    driver: bridge
